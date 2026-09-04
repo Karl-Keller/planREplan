@@ -20,7 +20,8 @@ An LLM front-end is planned (Phase 5) but follows the LLM-Modulo pattern strictl
 
 ```
 src/planreplan/
-  domain/       # pydantic entities: Project, Task, Dependency, Resource, Calendar, Schedule...
+  domain/       # pydantic entities: Project, Task, Dependency, Resource, Calendar,
+                #   Shift, PayRules, Schedule...; overtime aggregation lives here (no solver)
   cpm/          # deterministic critical-path engine (forward/backward pass, float) — no solver deps
   solve/        # CP-SAT model builder + adapters; solver isolation boundary
   monitor/      # progress ingestion, deviation detection
@@ -45,9 +46,9 @@ ruff check src tests && ruff format --check src tests
 
 1. **Solver isolation.** Nothing outside `solve/` imports `ortools`. The domain model and CPM engine must run without OR-Tools installed. Adapters translate domain ↔ solver model at the boundary.
 2. **Determinism in the core.** Given the same project state and random seed, `solve/`, `monitor/`, and `repair/` produce identical output. Set CP-SAT's `random_seed` and a fixed worker count in tests.
-3. **The schedule is immutable data.** A repair produces a *new* `Schedule` plus a `ChangeSet` diff; it never mutates the old one. Baselines are frozen forever.
-4. **Every repair reports churn.** Any function returning a repaired schedule also returns metrics: makespan delta, count of moved tasks, sum of |Δstart|, and whether the critical path changed. These are first-class outputs, not logging.
-5. **Time is integer.** Model time as integer periods (workday index against a `Calendar`), never datetime arithmetic inside the solver. Convert at the io boundary.
+3. **The schedule is immutable data.** A repair produces a *new* `Schedule` plus a `ChangeSet` diff; it never mutates the old one. Baselines are frozen forever, which is why `finish` is stored rather than recomputed — a derived span would let a later calendar edit silently change what an old baseline meant. A `Schedule` covers *every* leaf task, including completed ones; pinning is per endpoint, not per task.
+4. **Every repair reports churn.** Any function returning a repaired schedule also returns metrics: makespan delta (difference in `projectFinish` ticks), count of moved tasks, sum of |Δstart| over movable tasks, and whether the critical path changed. These are first-class outputs, not logging. The full contract, including why churn is measured on starts while `ChangeSet` records both endpoints, is in `docs/04-replanning-design.md`.
+5. **Time is integer ticks on a uniform axis.** Model time as integer ticks measured from the project epoch at the project's declared resolution (hourly by default) — *not* as a workday index, and never as datetime arithmetic inside the solver. `Calendar` is a predicate over that axis and owns every conversion to and from wall-clock time, including DST. Durations are work content in working ticks; the span a task occupies is derived. See ADR-8 in `docs/05-technology-decisions.md`.
 6. **LLM outputs are proposals.** Anything from `llm/` is typed as a proposal object and must pass through domain validation + a solver feasibility check before it can touch a schedule. This rule is load-bearing; do not weaken it for convenience.
 
 ## Conventions

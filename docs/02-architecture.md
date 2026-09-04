@@ -81,6 +81,8 @@ classDiagram
     +schedule Schedule
     +changes ChangeSet
     +churn ChurnMetrics
+    +brokenCommitments list~CommitmentBreach~
+    +tierReached int
   }
   class LlmFrontEnd {
     +parse(text) Proposal
@@ -96,7 +98,7 @@ classDiagram
   LlmFrontEnd ..> ExecutionMonitor : proposals (gated)
 ```
 
-Notes for implementers: `CpmEngine` is pure functions over the domain — no classes needed beyond a namespace if that's cleaner in Python. `ExecutionMonitor` consults CPM float trends to flag *deadline jeopardy* before anything is formally late; this is the cheap early-warning path that doesn't require a solver call. `RepairEngine` is where the stability/optimality tradeoff lives — see `04-replanning-design.md` for the policy semantics and the objective function of `STABLE_RESOLVE`.
+Notes for implementers: the calendar boundary follows the solver-isolation rule. `domain/` owns `Calendar` as a predicate over the tick axis (`isWorking`, `workingPrefix`, `span`, `intersect`) and owns overtime aggregation, both solver-free. `solve/` alone materialises the working-time prefix relation into the CP-SAT allowed-assignments table described in ADR-8, keyed by effective calendar and shared across tasks. `CpmEngine` is pure functions over the domain — no classes needed beyond a namespace if that's cleaner in Python. `ExecutionMonitor` consults CPM float trends to flag *deadline jeopardy* before anything is formally late; this is the cheap early-warning path that doesn't require a solver call. `RepairEngine` is where the stability/optimality tradeoff lives — see `04-replanning-design.md` for the policy semantics, the objective function of `STABLE_RESOLVE`, and the relaxation ladder. `RepairResult.tierReached` records how far down that ladder the repair had to go; a `RepairEngine` never surfaces a bare INFEASIBLE to a caller.
 
 ## Interfaces and phasing
 
