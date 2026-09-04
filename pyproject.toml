@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "planreplan"
+description = "Construction planning and replanning: a deterministic solver core wrapped in an execution monitor."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "docs/LICENSE" }
+authors = [{ name = "Karl Keller" }]
+keywords = ["construction", "scheduling", "rcpsp", "replanning", "cp-sat"]
+dynamic = ["version"]
+
+dependencies = [
+    "pydantic>=2.7",
+    "typer>=0.12",
+]
+
+# ortools is deliberately NOT a core dependency. Design rule 1 requires the
+# domain model and CPM engine to run without OR-Tools installed, and that is
+# only enforceable if a core install genuinely lacks it.
+[project.optional-dependencies]
+solve = ["ortools>=9.10"]
+llm = ["anthropic>=0.40"]
+dev = [
+    "planreplan[solve]",
+    "pytest>=8.2",
+    "hypothesis>=6.100",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+planreplan = "planreplan.cli:app"
+
+[tool.hatch.version]
+path = "src/planreplan/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/planreplan"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/planreplan"]
+
+[[tool.mypy.overrides]]
+module = ["ortools.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"

@@ -12,7 +12,7 @@ Context: the paradigm map in `docs/00-background.md` — construction planning i
 
 Decision: model scheduling and repair as CP-SAT problems using interval variables, `AddNoOverlap`/`AddCumulative` for resources, and precedence linear constraints. CP-SAT is free, mature, deterministic under fixed seed and worker count, handles the STABLE_RESOLVE objective naturally (soft constraints via penalty terms), and solves realistic instance sizes interactively.
 
-Alternative considered: PDDL 2.1 temporal planning via `unified-planning`. Rejected as the core because durative-action planners are weaker on cumulative resources and offer no natural stability objective. Kept open as a seam: `Scheduler` is an interface, and a unified-planning adapter is a welcome experiment (it would also unlock plan-space niceties like landmark analysis). Consequence: solver isolation rule in `CLAUDE.md` is what keeps this seam real.
+Alternative considered: PDDL 2.1 temporal planning via `unified-planning`. Rejected as the core because durative-action planners are weaker on cumulative resources and offer no natural stability objective. Kept open as a seam: `Scheduler` is an interface, and a unified-planning adapter is a welcome experiment (it would also unlock plan-space niceties like landmark analysis). Consequence: the solver isolation rule in `CLAUDE.md` is what keeps this seam real, and `ortools` is packaged as an optional dependency (`.[solve]`) rather than a core one so that the claim is falsifiable — a core install that accidentally required OR-Tools would fail CI rather than pass unnoticed.
 
 ## ADR-3: pydantic v2 for the domain model
 

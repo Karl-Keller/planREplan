@@ -4,7 +4,7 @@ A construction planning and management tool built on a contrarian-but-old idea: 
 
 ## Status
 
-Design phase. The `docs/` directory is the source of truth; implementation proceeds by the phases in `docs/06-roadmap.md`, built by Claude Code with a second Claude instance as design reviewer.
+Phase 0 (scaffolding) is complete; Phase 1 (domain model and CPM engine) is next. The `docs/` directory is the source of truth; implementation proceeds by the phases in `docs/06-roadmap.md`, built by Claude Code with a second Claude instance as design reviewer.
 
 ## Documents
 
@@ -21,10 +21,22 @@ Design phase. The `docs/` directory is the source of truth; implementation proce
 
 Diagrams are Mermaid and render directly on GitHub.
 
-## Quickstart (will be true after Phase 0)
+## Quickstart
 
 ```
 pip install -e ".[dev]"
 pytest
 planreplan --version
 ```
+
+Lint, format, and typecheck the way CI does:
+
+```
+ruff check src tests && ruff format --check src tests && mypy
+```
+
+`ortools` is an optional dependency rather than a core one, because design
+rule 1 requires the domain model and CPM engine to run without it — a claim
+only worth making if a plain `pip install -e .` genuinely lacks the solver.
+`tests/test_architecture.py` enforces that and the other hard design rules
+executably, rather than leaving them as prose to be noticed in review.

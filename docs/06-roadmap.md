@@ -2,9 +2,11 @@
 
 Phases are sized to be individually reviewable. Each ends with automated acceptance tests, clean lint/type checks, updated docs, and a CLI surface for the new capability (see "Definition of done" in `CLAUDE.md`). Later phases may reorder; earlier ones are load-bearing.
 
-## Phase 0 — Scaffolding
+## Phase 0 — Scaffolding — **done**
 
 Package layout per `CLAUDE.md`; pyproject with pinned dev tooling (pytest, hypothesis, ruff, mypy); CI workflow running lint + typecheck + tests; `planreplan --version` works. Acceptance: fresh clone → `pip install -e ".[dev]" && pytest` passes in under a minute.
+
+Delivered as specified, plus two things worth recording. `ortools` is an *optional* dependency (`.[solve]`), because design rule 1's promise that the core runs without OR-Tools is unverifiable if every install has it; CI has a second job that installs without the extra, asserts the solver is genuinely absent, and imports the core packages. And `tests/test_architecture.py` makes the hard design rules executable — solver isolation and the no-`llm`-in-core rule are checked by AST scan, layout drift against the documented package list is caught, and a subprocess blocks `ortools` at the meta path to catch transitive imports an AST scan cannot see. Measured: 12 s for install and tests on a warm pip cache.
 
 ## Phase 1 — Domain model + CPM engine
 
