@@ -10,8 +10,7 @@ classDiagram
   class Project {
     +id
     +name
-    +epoch datetime
-    +ticksPerDay int
+    +axis TimeAxis
     +calendar Calendar
     +payRules PayRules
     +tasks list~Task~
@@ -56,22 +55,41 @@ classDiagram
     +resourceId
     +demand int
   }
+  class TimeAxis {
+    +epoch datetime
+    +ticksPerDay int
+    +toDatetime(tick) datetime
+    +toTick(datetime) int
+    +toTickExact(datetime) int
+  }
   class Calendar {
     +id
     +name
     +weekPattern map~DayOfWeek,Shifts~
     +exceptions list~CalendarException~
+    +shiftsOn(date) Shifts
+  }
+  class CalendarIndex {
+    +horizon int
+    +blocks list~WorkBlock~
+    +totalWork int
     +isWorking(tick) bool
     +workingPrefix(tick) int
+    +tickAtWorkIndex(workIndex) int
+    +nextWorkingTick(tick) int
     +span(startTick, duration) int
-    +intersect(Calendar) Calendar
-    +toDatetime(tick) datetime
-    +toTick(datetime) int
+    +finish(startTick, duration) int
+    +intersect(CalendarIndex) CalendarIndex
+  }
+  class WorkBlock {
+    +start int
+    +end int
+    +workBefore int
   }
   class Shift {
     +name
-    +startHour int
-    +endHour int
+    +startMinute int
+    +endMinute int
   }
   class CalendarException {
     +window Window
@@ -170,7 +188,11 @@ classDiagram
   Project "1" *-- "many" Task
   Project "1" *-- "many" Resource
   Project "1" *-- "many" Dependency
+  Project "1" *-- "1" TimeAxis
   Project "1" *-- "many" Calendar
+  CalendarIndex ..> Calendar : materialises
+  CalendarIndex --> TimeAxis
+  CalendarIndex "1" *-- "many" WorkBlock
   Project "1" *-- "many" PayRules
   Project "1" o-- "many" Baseline
   Calendar "1" *-- "many" Shift
@@ -197,9 +219,17 @@ classDiagram
 
 Time is a **uniform integer tick axis** measured from the project `epoch`, with no gaps and no compression. Every tick exists whether or not anyone is working. `Project.ticksPerDay` declares the resolution — 24 (hourly, the default), 8 (shift), 1 (daily), or finer such as 96 (quarter-hour). Precedence, resource constraints, deadlines, actuals, and schedule starts are all expressed on this one axis, so any two entities are directly comparable regardless of which calendar governs them. See ADR-8 in `05-technology-decisions.md` for why the axis is not a per-calendar working-time index.
 
-`Calendar` is a **predicate over the axis**, never the axis itself. It answers `isWorking(tick)` and reports which `Shift` a working tick belongs to. `weekPattern` maps each day of the week to a list of shift windows in local wall-clock time; `CalendarException` overrides a window (a holiday, a weather shutdown, an equipment breakdown, an inspector's absence — all the same mechanism). `epoch` is timezone-aware, ticks are absolute, and `Calendar` absorbs daylight-saving transitions when it converts local shift definitions into ticks. No other component performs datetime arithmetic.
+`Calendar` is a **predicate over the axis**, never the axis itself, and it separates into three types. `TimeAxis` owns the origin and resolution and performs every conversion between wall-clock time and ticks. `Calendar` is pure data: `weekPattern` maps each day of the week to shift windows in local wall-clock time, and `CalendarException` overrides a window (a holiday, a weather shutdown, an equipment breakdown, an inspector's absence — all the same mechanism), with the last matching exception winning so a narrow override can follow a broad one. `CalendarIndex` materialises a `Calendar` against a `TimeAxis` and answers the questions the solver and monitor actually ask: `isWorking`, `workingPrefix`, `span`, `intersect`.
 
-`Task.duration` is an integer count of **working ticks** — work content, not elapsed span. The span a task occupies on the axis is derived and start-dependent: `span = duration + non-working ticks straddled`. A 24-hour task starting Friday morning occupies 24 ticks on a seven-day calendar and 88 on a five-day one. The io and CLI layers may accept durations written as days (`3d`) and convert using the governing calendar's nominal day length, but hours are canonical — otherwise editing a calendar would silently redefine every duration in the project.
+The split matters because a `Calendar` cannot answer `isWorking(tick)` alone — it needs the axis to know what a tick is — and because intersection is exact and cheap on materialised blocks but awkward on two sets of week patterns and exceptions. It is the same separation `02-architecture.md` draws between domain-owned predicates and solver-owned tables, one level down.
+
+A `CalendarIndex` stores **sorted runs of working ticks** (`WorkBlock`), each tagged with the work preceding it, rather than a dense per-tick array. Within a block the prefix function W is affine, so a binary search answers `workingPrefix` in O(log n). A five-day eight-hour calendar over three years is roughly 780 blocks against 26,000 ticks; the representation is closed under intersection, which matters because effective calendars are intersections and there may be one per distinct resource mix; and the linear walk that builds the ADR-8 solver table is a walk over blocks. The cost is O(log n) lookup rather than O(1), which is negligible beside model construction. The index is built eagerly to an explicit horizon and refuses queries beyond it, because silently reporting non-working time past the end would be indistinguishable from a project that stops in mid-air.
+
+Shift boundaries are stored as **minutes from local midnight**, because construction start times are routinely half-past — a 06:30 start is ordinary. Whether a boundary is *usable* depends on the axis: 06:30 requires `ticksPerDay >= 48`, and building the index refuses a misaligned boundary rather than rounding it, naming the resolution that would fit.
+
+`epoch` is timezone-aware, ticks are absolute, and boundaries are converted per local day, which is what absorbs daylight saving. A wall-clock eight-hour shift is seven working ticks on a spring-forward day and nine on a fall-back day, because that is how long the crew is physically on site. No other component performs datetime arithmetic.
+
+`Task.duration` is an integer count of **working ticks** — work content, not elapsed span. The span a task occupies on the axis is derived and start-dependent: `span = duration + non-working ticks straddled`. A 24-hour task starting Friday at 08:00 occupies 24 ticks on a seven-day round-the-clock calendar and 104 on a five-day eight-hour one; an 8-hour task starting Friday at 13:00 occupies 8 ticks on the former and 72 on the latter. Those figures are pinned as tests in `tests/test_calendar.py`. The io and CLI layers may accept durations written as days (`3d`) and convert using the governing calendar's nominal day length, but hours are canonical — otherwise editing a calendar would silently redefine every duration in the project.
 
 A task's **effective calendar** is its declared calendar intersected with the effective calendars of all assigned resources; a resource's effective calendar is its base calendar with its own `exceptions` layered on top. This gives "governing calendar" a precise definition: work happens only when the task's calendar and every assigned resource agree. An empty intersection is a validation error, not an infeasible solve.
 
@@ -257,7 +287,7 @@ The definition is total and never divides by zero, and this is provable rather t
 
 ## Validation rules (enforced by pydantic + a `validate_project` pass)
 
-The dependency graph restricted to leaves is acyclic. Every `Assignment` references existing task and resource ids, with `0 < demand <= capacity`. Milestones have zero duration; every other leaf task has `duration > 0`. Every task's effective calendar has at least one working tick within the planning horizon. `Project.epoch` is timezone-aware. Shift windows within a day are non-overlapping, ordered, and bounded by the day; no calendar's daily working ticks exceed `ticksPerDay`. `PayRules` thresholds are positive and `weeklyRegularHours >= dailyRegularHours`. A `ProgressReport` may not set `actualFinish` before `actualStart`, nor report on a summary task; if it supplies both `percentComplete` and `remainingDuration`, they are reconciled in favour of `remainingDuration` at the boundary.
+The dependency graph restricted to leaves is acyclic. Every `Assignment` references existing task and resource ids, with `0 < demand <= capacity`. Milestones have zero duration; every other leaf task has `duration > 0`. Every task's effective calendar has at least one working tick within the planning horizon. `Project.epoch` is timezone-aware. Shift windows within a day are non-overlapping, ordered, and bounded by the day, and each ends after it starts; a non-working exception carries no shifts. Every shift boundary aligns to the project's tick grid, checked when the `CalendarIndex` is built. No calendar's daily working ticks exceed `ticksPerDay`. `PayRules` thresholds are positive and `weeklyRegularHours >= dailyRegularHours`. A `ProgressReport` may not set `actualFinish` before `actualStart`, nor report on a summary task; if it supplies both `percentComplete` and `remainingDuration`, they are reconciled in favour of `remainingDuration` at the boundary.
 
 A `Schedule` contains exactly one entry per leaf task — no more, no fewer. Every entry satisfies `start <= resumeAt <= finish` where `resumeAt` is set, and `W(finish) − W(resumeAt)` equals the work remaining at `dataDate`. `COMPLETE` entries finish at or before `dataDate`; `IN_PROGRESS` entries start at or before `dataDate` and resume at or after it; `PLANNED` entries start at or after it. `start` and `finish` both fall on working ticks of the task's effective calendar. A `ChangeSet`'s `added` and `removed` sets are disjoint, every `TaskMove` names a task present in both schedules, and every `added`/`removed` id is present in exactly one of them.
 
