@@ -43,18 +43,19 @@ packages = ["src/planreplan"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests"]
+src = ["src", "tests", "benchmarks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ANN"]
+"benchmarks/*" = ["T201"]  # printing a table is the point
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src/planreplan"]
+files = ["src/planreplan", "benchmarks"]
 
 [[tool.mypy.overrides]]
 module = ["ortools.*"]
@@ -70,5 +71,7 @@ follow_imports_for_stubs = true
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+# The repo root, so tests can import benchmarks/ without it being installed.
+pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"

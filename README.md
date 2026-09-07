@@ -32,7 +32,13 @@ planreplan --version
 Lint, format, and typecheck the way CI does:
 
 ```
-ruff check src tests && ruff format --check src tests && mypy
+ruff check src tests benchmarks && ruff format --check src tests benchmarks && mypy
+```
+
+Reproduce the scale measurement published in `docs/06-roadmap.md`:
+
+```
+python benchmarks/rcpsp_scale.py
 ```
 
 `ortools` is an optional dependency rather than a core one, because design

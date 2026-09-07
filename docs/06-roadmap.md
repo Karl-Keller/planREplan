@@ -26,21 +26,43 @@ Acceptance: on resource-unconstrained projects the solver's makespan equals CPM'
 
 ### Measured: 500 tasks, 20 resources, 10-second limit
 
-| | horizon | validate | greedy | CP-SAT | status |
-|---|---|---|---|---|---|
-| daily (`ticksPerDay=1`) | 232 | 0.20 s | 107 ticks in 0.02 s | 106 ticks, gap 21 | FEASIBLE |
-| hourly (`ticksPerDay=24`) | 8048 | 0.49 s | 2534 ticks in 0.02 s | no improvement found | UNKNOWN |
+Reproduce with `python benchmarks/rcpsp_scale.py`. The instance is seeded, so
+the horizons and makespans below are stable; wall times are a laptop's.
 
-**Daily meets NFR2. Hourly still does not**, and this is the honest answer the phase was meant to produce rather than avoid. At hourly resolution CP-SAT does not better the greedy serial schedule inside ten seconds on an instance this size, so what comes back is the greedy plan: feasible, calendar-correct, resource-correct, and not proven optimal. It is labelled UNKNOWN, never passed off as a solve.
+| | validated horizon | validate | fitted horizon | greedy | CP-SAT | status |
+|---|---|---|---|---|---|---|
+| daily (`ticksPerDay=1`) | 304 | 0.27 s | 304 | 128 ticks in 0.01 s | 128 ticks, gap 20 | FEASIBLE |
+| hourly (`ticksPerDay=24`) | 8896 | 0.52 s | 8896 | 2531 ticks in 0.02 s | 2531 ticks, gap 2531 | UNKNOWN |
 
-What *is* now fast is everything around the solve. A feasible schedule exists 0.5 s after loading the project; the remaining ten seconds are CP-SAT spending its budget without finding anything better. Set a shorter limit and the same plan arrives sooner.
+**At this size CP-SAT does not improve on the greedy serial schedule at either
+resolution.** Both rows return the greedy makespan: at daily CP-SAT at least
+proves a bound twenty ticks below it, at hourly it proves nothing within the
+limit and the result is labelled UNKNOWN rather than passed off as a solve.
+This is the honest answer the phase was meant to produce rather than avoid.
 
-An earlier run of this benchmark spent 7.4 s of the hourly budget on validation alone, because the horizon derivation demanded room to run the whole project strictly one task at a time — 6708 working ticks where the network's longest chain is 503, giving a horizon of about twelve years. Sizing validation to the chain and fitting a scheduling horizon from an actual greedy schedule cut it to 0.49 s and the horizon by 13×, with identical makespans. The remaining shortfall is CP-SAT's search, not the model around it.
+Everything *around* the solve is fast. A feasible, calendar-correct,
+resource-correct schedule exists about half a second after loading the project;
+the remaining ten seconds are CP-SAT spending its budget. Shorten the limit and
+the same plan arrives sooner.
 
-Two things the measurement still says:
+An earlier version of this measurement spent 7.4 s of the hourly budget on
+validation alone, because horizon derivation demanded room to run the whole
+project strictly one task at a time — 6708 working ticks where the network's
+longest chain is 503, giving a horizon of about twelve years. Sizing validation
+to the chain cut that to 0.5 s and the horizon by 13×, with makespans
+unchanged. Note that both rows show the fitted horizon equal to the validated
+one: greedy fits inside the chain-sized horizon here, so `fitted_index` widens
+nothing. It is insurance for the instances where contention runs further, not a
+step that always costs something.
 
-1. **The greedy schedule is doing the real work.** It costs 20 ms and lands within 1 % of CP-SAT's best daily answer. That is a comment on the instance shape rather than on CP-SAT, but it means the honest default is to always compute it, which is what happens.
-2. **Optimality is out of reach at this size.** Even daily leaves a gap of 21 unproven after ten seconds.
+Two things the measurement says about the solver itself:
+
+1. **The greedy schedule is doing the real work.** It costs 10-20 ms and CP-SAT
+   cannot better it here in a thousand times that. That is a comment on this
+   instance's shape rather than on CP-SAT, but it means always computing it is
+   the honest default, which is what happens.
+2. **Optimality is out of reach at this size.** Even daily leaves a gap of 20
+   unproven after ten seconds.
 
 `ticksPerDay` remains the documented escape hatch, and it is a real one: the same project at daily resolution solves comfortably.
 
