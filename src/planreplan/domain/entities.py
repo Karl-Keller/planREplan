@@ -17,6 +17,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from planreplan.domain.calendar import Calendar, CalendarException, DayOfWeek
+from planreplan.domain.schedule import Baseline
 from planreplan.domain.time_axis import Tick, TimeAxis
 
 
@@ -214,4 +215,5 @@ class Project(BaseModel):
     dependencies: tuple[Dependency, ...] = ()
     resources: tuple[Resource, ...] = ()
     assignments: tuple[Assignment, ...] = ()
+    baselines: tuple[Baseline, ...] = ()
     planning_horizon: Tick | None = Field(default=None, gt=0)

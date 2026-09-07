@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 
 from planreplan.domain.entities import Project
+from planreplan.domain.schedule import Schedule
 from planreplan.domain.validation import validate_project
 
 #: Schema version this build writes. Bump when the persisted shape changes in a
@@ -109,3 +110,42 @@ def load_project(directory: Path, *, validate: bool = False) -> Project:
     if validate:
         validate_project(project)
     return project
+
+
+def save_schedule(schedule: Schedule, directory: Path) -> Path:
+    """Write a schedule into a project directory's ``schedules/``.
+
+    The filename is the schedule's content digest, so writing the same schedule
+    twice is idempotent and history is content-addressed: a ChangeSet naming
+    two ids names two specific, reproducible plans.
+    """
+    target = Path(directory) / SCHEDULES_DIR
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{schedule.id}.json"
+    path.write_text(
+        json.dumps(json.loads(schedule.model_dump_json()), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def load_schedule(directory: Path, schedule_id: str) -> Schedule:
+    """Read one schedule by id, verifying the content still hashes to it."""
+    path = Path(directory) / SCHEDULES_DIR / f"{schedule_id}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"no schedule {schedule_id!r} in {directory}")
+    schedule = Schedule.model_validate_json(path.read_text(encoding="utf-8"))
+    if schedule.id != schedule_id:
+        raise ValueError(
+            f"{path} contains schedule {schedule.id!r}, not {schedule_id!r}; "
+            "the file has been edited and is no longer the plan it claims to be"
+        )
+    return schedule
+
+
+def list_schedules(directory: Path) -> tuple[str, ...]:
+    """Ids of every stored schedule, sorted for reproducible listings."""
+    target = Path(directory) / SCHEDULES_DIR
+    if not target.is_dir():
+        return ()
+    return tuple(sorted(path.stem for path in target.glob("*.json")))

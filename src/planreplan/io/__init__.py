@@ -15,8 +15,11 @@ from planreplan.io.json_store import (
     SCHEDULES_DIR,
     SCHEMA_VERSION,
     SchemaVersionError,
+    list_schedules,
     load_project,
+    load_schedule,
     save_project,
+    save_schedule,
 )
 
 __all__ = [
@@ -25,6 +28,9 @@ __all__ = [
     "SCHEDULES_DIR",
     "SCHEMA_VERSION",
     "SchemaVersionError",
+    "list_schedules",
     "load_project",
+    "load_schedule",
     "save_project",
+    "save_schedule",
 ]

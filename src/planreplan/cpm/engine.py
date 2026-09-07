@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict
 
 from planreplan.domain.calendar import CalendarIndex
 from planreplan.domain.entities import Dependency, DependencyKind
+from planreplan.domain.schedule import EntryState, Schedule, ScheduleEntry
 from planreplan.domain.time_axis import Tick
 from planreplan.domain.validation import ProjectIndex
 
@@ -77,8 +78,30 @@ class CpmResult(BaseModel):
     critical_path: tuple[str, ...]
 
     def spans(self) -> dict[str, tuple[Tick, Tick]]:
-        """Early dates as spans, the shape ``overtime_report`` consumes."""
+        """Early dates as spans."""
         return {t.task_id: (t.early_start, t.early_finish) for t in self.tasks.values()}
+
+    def to_schedule(self, *, data_date: Tick = 0) -> Schedule:
+        """The early-date plan as a ``Schedule``.
+
+        Resource-unconstrained by construction — CPM knows nothing of
+        capacities — so this is the optimistic bound a real solve is measured
+        against, and the earliest a schedule can exist at all.
+        """
+        return Schedule(
+            data_date=data_date,
+            project_finish=self.project_finish,
+            entries={
+                task_id: ScheduleEntry(
+                    task_id=task_id,
+                    start=entry.early_start,
+                    finish=entry.early_finish,
+                    state=EntryState.PLANNED,
+                )
+                for task_id, entry in self.tasks.items()
+            },
+            solver_info={"source": "cpm"},
+        )
 
 
 def topological_order(nodes: Sequence[str], links: Sequence[Dependency]) -> tuple[str, ...]:

@@ -139,6 +139,7 @@ classDiagram
     +projectFinish int
     +entries map~TaskId,ScheduleEntry~
     +solverInfo
+    +spans() map~TaskId,Span~
   }
   class ScheduleEntry {
     +taskId
@@ -306,6 +307,8 @@ Each `ScheduleEntry` carries `start`, `finish`, `state`, and, for in-progress wo
 `resumeAt` exists because an in-progress task is a **pinned prefix plus a schedulable remainder**, and those are two different decisions. A task started Friday at 13:00 and interrupted on Monday keeps its Friday actual start while its remaining work re-plans to Tuesday. Remaining work is always contiguous in working time from `resumeAt`; genuine interruptions re-anchor on the next status update rather than being modeled as gaps inside the schedule, which keeps `Schedule` a flat map instead of a list of work windows per task. Historical gaps live in `events.jsonl`, where they belong. For `PLANNED` entries `resumeAt` equals `start`; for `COMPLETE` entries it is unset.
 
 `finish` is **stored, not recomputed**. Span depends on the effective calendar, which depends on assignments, so a derived finish would mean that editing a calendar next month silently changed what a baseline frozen last year *meant* — an immutable object with mutable implications. Storing it makes every schedule self-describing and the audit trail honest.
+
+`Schedule.id` is a digest of the schedule's content, not a random value. Identical schedules therefore have identical ids, a `ChangeSet` naming one names something reproducible, and determinism (NFR1) survives; a UUID would have broken all three for no gain. Stored schedules are filed under that digest, so writing the same schedule twice is idempotent and a file whose content no longer hashes to its name is refused rather than trusted — a malformed file is caught by parsing, and the digest catches a plausible lie. `solverInfo` is excluded from the digest: two solvers that reached the same plan reached the same plan.
 
 `Schedule.dataDate` is the tick the schedule was generated against. An unstarted task's "may not start before now" bound is meaningless without it, and no schedule is auditable without it. `projectFinish` is the maximum `finish` across leaf tasks; makespan is derived as `projectFinish − epoch`, and `makespan_delta` compares `projectFinish` ticks directly so that no metric depends on a drifting origin. `Baseline` is a schedule with a name and a freeze timestamp.
 

@@ -35,6 +35,12 @@ from planreplan.domain.overtime import (
     Span,
     overtime_report,
 )
+from planreplan.domain.schedule import (
+    Baseline,
+    EntryState,
+    Schedule,
+    ScheduleEntry,
+)
 from planreplan.domain.time_axis import Tick, TimeAxis
 from planreplan.domain.validation import (
     ProjectIndex,
@@ -44,6 +50,7 @@ from planreplan.domain.validation import (
 
 __all__ = [
     "Assignment",
+    "Baseline",
     "Calendar",
     "CalendarException",
     "CalendarIndex",
@@ -51,6 +58,7 @@ __all__ = [
     "Dependency",
     "DependencyKind",
     "Endpoint",
+    "EntryState",
     "OvertimeReport",
     "OvertimeResolutionError",
     "PayClass",
@@ -59,6 +67,8 @@ __all__ = [
     "ProjectIndex",
     "ProjectValidationError",
     "Resource",
+    "Schedule",
+    "ScheduleEntry",
     "Shift",
     "Span",
     "Task",

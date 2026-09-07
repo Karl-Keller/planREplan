@@ -15,6 +15,8 @@ from planreplan.domain import (
     PayRules,
     Project,
     Resource,
+    Schedule,
+    ScheduleEntry,
     Shift,
     Task,
     TimeAxis,
@@ -75,7 +77,19 @@ def build(
     index = validate_project(project)
     calendar = index.effective_calendar("t")
     start = calendar.tick_at_work_index(0)
-    return index, {"t": (start, calendar.finish(start, duration))}
+    return index, schedule_of({"t": (start, calendar.finish(start, duration))})
+
+
+def schedule_of(spans) -> Schedule:
+    """Wrap plain spans as a Schedule, which is what aggregation now takes."""
+    return Schedule(
+        data_date=0,
+        project_finish=max((f for _, f in spans.values()), default=0),
+        entries={
+            task_id: ScheduleEntry(task_id=task_id, start=start, finish=finish)
+            for task_id, (start, finish) in spans.items()
+        },
+    )
 
 
 def tally(reports, pay_class: PayClass) -> int:
@@ -86,8 +100,8 @@ def tally(reports, pay_class: PayClass) -> int:
 
 
 def test_a_four_by_ten_week_accrues_no_weekly_overtime():
-    index, spans = build(duration=40, calendar_id="4x10")
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=40, calendar_id="4x10")
+    reports = overtime_report(index, schedule)
     assert tally(reports, PayClass.WEEKLY_OVERTIME) == 0
 
 
@@ -96,24 +110,24 @@ def test_a_four_by_ten_week_accrues_daily_overtime_unless_exempted():
     charged = PayRules(id="strict", daily_regular_hours=8, weekly_regular_hours=40)
     exempt = PayRules(id="exempt", daily_regular_hours=10, weekly_regular_hours=40)
 
-    index, spans = build(duration=40, calendar_id="4x10", rules=charged)
-    assert tally(overtime_report(index, spans), PayClass.DAILY_OVERTIME) == 8
+    index, schedule = build(duration=40, calendar_id="4x10", rules=charged)
+    assert tally(overtime_report(index, schedule), PayClass.DAILY_OVERTIME) == 8
 
-    index, spans = build(duration=40, calendar_id="4x10", rules=exempt)
-    assert tally(overtime_report(index, spans), PayClass.DAILY_OVERTIME) == 0
+    index, schedule = build(duration=40, calendar_id="4x10", rules=exempt)
+    assert tally(overtime_report(index, schedule), PayClass.DAILY_OVERTIME) == 0
 
 
 def test_a_forty_hour_five_by_eight_week_is_all_regular():
-    index, spans = build(duration=40)
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=40)
+    reports = overtime_report(index, schedule)
     assert len(reports) == 1
     assert reports[0].regular_ticks == 40
     assert reports[0].premium_ticks == {}
 
 
 def test_the_forty_first_hour_is_weekly_overtime():
-    index, spans = build(duration=48, calendar_id="7x8")
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=48, calendar_id="7x8")
+    reports = overtime_report(index, schedule)
     week = reports[0]
     assert week.regular_ticks == 40
     assert week.premium_ticks[PayClass.WEEKLY_OVERTIME] == 8
@@ -125,8 +139,8 @@ def test_the_forty_first_hour_is_weekly_overtime():
 def test_a_saturday_carries_its_premium_on_a_short_week():
     """Positional premium applies whether or not the week reached forty hours."""
     rules = PayRules(id="cba", day_premiums={DayOfWeek.SATURDAY: 1.5})
-    index, spans = build(duration=16, calendar_id="fri_sat", rules=rules)
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=16, calendar_id="fri_sat", rules=rules)
+    reports = overtime_report(index, schedule)
     assert reports[0].total_ticks == 16  # nowhere near forty
     assert reports[0].regular_ticks == 8  # Friday
     assert tally(reports, PayClass.DAY_PREMIUM) == 8  # Saturday
@@ -135,8 +149,8 @@ def test_a_saturday_carries_its_premium_on_a_short_week():
 
 def test_a_shift_premium_is_keyed_by_shift_name():
     rules = PayRules(id="cba", shift_premiums={"night": 1.25})
-    index, spans = build(duration=8, calendar_id="nights", rules=rules)
-    assert tally(overtime_report(index, spans), PayClass.SHIFT_PREMIUM) == 8
+    index, schedule = build(duration=8, calendar_id="nights", rules=rules)
+    assert tally(overtime_report(index, schedule), PayClass.SHIFT_PREMIUM) == 8
 
 
 def test_working_a_holiday_earns_the_holiday_premium():
@@ -152,8 +166,8 @@ def test_working_a_holiday_earns_the_holiday_premium():
     holidayed = FIVE_BY_EIGHT.model_copy(update={"exceptions": (callout,)})
     calendars = (holidayed, *ALL_CALENDARS[1:])
     rules = PayRules(id="cba", holiday_premium=2.0)
-    index, spans = build(duration=24, rules=rules, calendars=calendars)
-    assert tally(overtime_report(index, spans), PayClass.HOLIDAY) == 8
+    index, schedule = build(duration=24, rules=rules, calendars=calendars)
+    assert tally(overtime_report(index, schedule), PayClass.HOLIDAY) == 8
 
 
 # -- no pyramiding ---------------------------------------------------------
@@ -167,8 +181,8 @@ def test_an_hour_earns_one_class_at_the_highest_multiplier():
         day_premiums={DayOfWeek.SUNDAY: 2.0},
         weekly_overtime_multiplier=1.5,
     )
-    index, spans = build(duration=56, calendar_id="7x8", rules=rules)
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=56, calendar_id="7x8", rules=rules)
+    reports = overtime_report(index, schedule)
     sunday = tally(reports, PayClass.DAY_PREMIUM)
     assert sunday == 8
     assert sum(r.total_ticks for r in reports) == 56
@@ -181,8 +195,8 @@ def test_regular_plus_premium_always_equals_total():
         day_premiums={DayOfWeek.SATURDAY: 1.5, DayOfWeek.SUNDAY: 2.0},
         shift_premiums={"day": 1.1},
     )
-    index, spans = build(duration=60, calendar_id="7x8", rules=rules)
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=60, calendar_id="7x8", rules=rules)
+    reports = overtime_report(index, schedule)
     assert sum(r.total_ticks for r in reports) == 60
     for report in reports:
         assert report.total_ticks == report.regular_ticks + sum(report.premium_ticks.values())
@@ -209,11 +223,15 @@ def test_weekly_overtime_comes_from_the_combination_of_assignments():
     calendar = index.effective_calendar("a")
     a_start = calendar.tick_at_work_index(0)
     b_start = calendar.tick_at_work_index(24)
-    spans = {
-        "a": (a_start, calendar.finish(a_start, 24)),
-        "b": (b_start, calendar.finish(b_start, 24)),
-    }
-    reports = overtime_report(index, spans)
+    reports = overtime_report(
+        index,
+        schedule_of(
+            {
+                "a": (a_start, calendar.finish(a_start, 24)),
+                "b": (b_start, calendar.finish(b_start, 24)),
+            }
+        ),
+    )
     assert sum(r.total_ticks for r in reports) == 48
     assert tally(reports, PayClass.WEEKLY_OVERTIME) == 8
 
@@ -236,13 +254,13 @@ def test_concurrent_assignments_do_not_invent_hours():
     calendar = index.effective_calendar("a")
     start = calendar.tick_at_work_index(0)
     span = (start, calendar.finish(start, 8))
-    reports = overtime_report(index, {"a": span, "b": span})
+    reports = overtime_report(index, schedule_of({"a": span, "b": span}))
     assert sum(r.total_ticks for r in reports) == 8
 
 
 def test_a_resource_with_no_assignments_produces_no_rows():
-    index, spans = build(duration=8)
-    assert all(r.resource_id == "crew" for r in overtime_report(index, spans))
+    index, schedule = build(duration=8)
+    assert all(r.resource_id == "crew" for r in overtime_report(index, schedule))
 
 
 def test_idle_time_inside_a_span_is_not_paid():
@@ -256,7 +274,7 @@ def test_idle_time_inside_a_span_is_not_paid():
     friday_1pm = 4 * 24 + 13
     span = (friday_1pm, calendar.finish(friday_1pm, 8))
     assert span[1] - span[0] == 72
-    reports = overtime_report(index, {"t": span})
+    reports = overtime_report(index, schedule_of({"t": span}))
     assert sum(r.total_ticks for r in reports) == 8
 
 
@@ -281,12 +299,12 @@ def test_an_axis_that_cannot_express_an_hour_is_refused():
     )
     index = validate_project(project)
     with pytest.raises(OvertimeResolutionError, match="whole number of"):
-        overtime_report(index, {"t": (0, 2)})
+        overtime_report(index, schedule_of({"t": (0, 2)}))
 
 
 def test_half_hour_resolution_scales_the_thresholds():
     fine = TimeAxis(epoch=datetime(2026, 9, 7, tzinfo=NY), ticks_per_day=48)
-    index, spans = build(duration=96, calendar_id="7x8", axis=fine)
-    reports = overtime_report(index, spans)
+    index, schedule = build(duration=96, calendar_id="7x8", axis=fine)
+    reports = overtime_report(index, schedule)
     assert reports[0].regular_ticks == 80  # forty hours at two ticks each
     assert reports[0].premium_ticks[PayClass.WEEKLY_OVERTIME] == 16

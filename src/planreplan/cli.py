@@ -134,11 +134,12 @@ def cpm(
 def overtime(project: ProjectArg) -> None:
     """Report regular and premium time per resource per pay week.
 
-    Spans come from the CPM early dates, which is the earliest anything can be
-    said about overtime before a solver produces a real schedule.
+    The schedule comes from the CPM early dates, which is the earliest
+    anything can be said about overtime before a solver accounts for resource
+    contention.
     """
     index = _load_and_validate(project)
-    reports = overtime_report(index, analyse(index).spans())
+    reports = overtime_report(index, analyse(index).to_schedule())
     if not reports:
         typer.echo("No resourced work; nothing to report.")
         return

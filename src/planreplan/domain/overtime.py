@@ -9,9 +9,8 @@ v1 represents and reports overtime; it does not optimise against it. When cost
 objectives arrive, minimising premium time becomes another term in the
 ``STABLE_RESOLVE`` objective without a schema change.
 
-Spans are passed in rather than read from a ``Schedule``, which does not exist
-until Phase 2. The signature will take a schedule then; the arithmetic will
-not change.
+Aggregation reads a ``Schedule``. It took a bare mapping of spans while no
+schedule type existed; the arithmetic did not change when the type arrived.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 from planreplan.domain.calendar import Calendar, DayOfWeek
 from planreplan.domain.entities import PayClass, PayRules
+from planreplan.domain.schedule import Schedule
 from planreplan.domain.time_axis import Tick, TimeAxis
 from planreplan.domain.validation import ProjectIndex
 
@@ -185,7 +185,7 @@ def _ticks(runs: Sequence[Span]) -> Iterator[Tick]:
         yield from range(start, end)
 
 
-def overtime_report(index: ProjectIndex, spans: Mapping[str, Span]) -> tuple[OvertimeReport, ...]:
+def overtime_report(index: ProjectIndex, schedule: Schedule) -> tuple[OvertimeReport, ...]:
     """Regular and premium ticks per resource per pay week.
 
     Hours are counted as **wall-clock engagement of the resource**, not
@@ -196,11 +196,12 @@ def overtime_report(index: ProjectIndex, spans: Mapping[str, Span]) -> tuple[Ove
 
     Args:
         index: a validated project.
-        spans: task id to ``(start, finish)`` on the axis, finish exclusive.
+        schedule: the schedule whose spans the resources worked.
 
     Raises:
         OvertimeResolutionError: if the axis cannot express a whole hour.
     """
+    spans = schedule.spans()
     axis = index.project.axis
     per_hour = _ticks_per_hour(axis)
     reports: list[OvertimeReport] = []
