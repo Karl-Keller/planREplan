@@ -17,15 +17,45 @@ from planreplan.domain.calendar import (
     Shift,
     WorkBlock,
 )
+from planreplan.domain.entities import (
+    Assignment,
+    Dependency,
+    DependencyKind,
+    Endpoint,
+    PayClass,
+    PayRules,
+    Project,
+    Resource,
+    Task,
+    TaskStatus,
+)
 from planreplan.domain.time_axis import Tick, TimeAxis
+from planreplan.domain.validation import (
+    ProjectIndex,
+    ProjectValidationError,
+    validate_project,
+)
 
 __all__ = [
+    "Assignment",
     "Calendar",
     "CalendarException",
     "CalendarIndex",
     "DayOfWeek",
+    "Dependency",
+    "DependencyKind",
+    "Endpoint",
+    "PayClass",
+    "PayRules",
+    "Project",
+    "ProjectIndex",
+    "ProjectValidationError",
+    "Resource",
     "Shift",
+    "Task",
+    "TaskStatus",
     "Tick",
     "TimeAxis",
     "WorkBlock",
+    "validate_project",
 ]

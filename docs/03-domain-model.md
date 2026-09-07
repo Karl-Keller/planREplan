@@ -8,18 +8,32 @@ The domain model is the ubiquitous language of the system. Names below are norma
 classDiagram
   direction TB
   class Project {
+    +schemaVersion int
     +id
     +name
     +axis TimeAxis
-    +calendar Calendar
-    +payRules PayRules
+    +calendars list~Calendar~
+    +defaultCalendarId
+    +payRules list~PayRules~
+    +defaultPayRulesId
     +tasks list~Task~
+    +dependencies list~Dependency~
     +resources list~Resource~
+    +assignments list~Assignment~
+    +planningHorizon int
     +baselines list~Baseline~
+  }
+  class ProjectIndex {
+    +horizon int
+    +leaves list~TaskId~
+    +leafDependencies list~Dependency~
+    +wbsPath(taskId) str
+    +leavesUnder(taskId) list~TaskId~
+    +calendarForResource(resourceId) CalendarIndex
+    +effectiveCalendar(taskId) CalendarIndex
   }
   class Task {
     +id
-    +wbsPath
     +name
     +duration int
     +calendarId
@@ -188,6 +202,8 @@ classDiagram
   Project "1" *-- "many" Task
   Project "1" *-- "many" Resource
   Project "1" *-- "many" Dependency
+  ProjectIndex ..> Project : validated view of
+  ProjectIndex ..> CalendarIndex : caches
   Project "1" *-- "1" TimeAxis
   Project "1" *-- "many" Calendar
   CalendarIndex ..> Calendar : materialises
@@ -241,7 +257,20 @@ A task's **effective calendar** is its declared calendar intersected with the ef
 
 Tasks form a WBS tree via `parentId`; only leaf tasks carry durations, assignments, and schedule dates — summary tasks derive their spans from children (HTN-style: summaries are decomposable tasks, leaves are primitive). `wbsPath` (e.g. `1.3.2`) is display metadata derived from the tree, never an identity.
 
-Dependencies connect leaf tasks (v1; summary-level dependencies are expanded to leaves at validation time). All four kinds are supported from the start because construction schedules use SS+lag pervasively.
+Dependencies connect leaf tasks. All four kinds are supported from the start because construction schedules use SS+lag pervasively.
+
+Summary-level dependencies are expanded to leaves at validation time, but **only where the expansion is exact**. A summary's start is the earliest of its leaves and its finish the latest; replacing one link with one link per leaf is a conjunction, which reproduces a *maximum* exactly and a *minimum* only by over-constraining. So a link expands when it reads the predecessor's **finish** and when it constrains the successor's **start**:
+
+| | predecessor is a summary | successor is a summary |
+|---|---|---|
+| FS (pred finish → succ start) | expands | expands |
+| SS (pred start → succ start) | refused | expands |
+| FF (pred finish → succ finish) | expands | refused |
+| SF (pred start → succ finish) | refused | refused |
+
+The refused combinations are rejected with an error naming the task and telling the modeller to link a leaf. Silently expanding them would tighten the schedule without saying so, which is the exact failure this system exists to prevent: a plan that looks feasible because the tool quietly assumed more than the modeller stated. Expanding summary links whose semantics genuinely need a modelled summary start or finish is a v2 candidate.
+
+`wbsPath` is not stored. It is display metadata derived from the tree, so `ProjectIndex` computes it and there is no field to drift out of step with the structure it describes.
 
 Resources are renewable with integer capacity per tick (a crew of 4, 2 cranes). An `Assignment` demands integer units for the task's full duration (v1 simplification; time-varying demand is out of scope). **A resource is reserved across the task's entire span, including internal non-working gaps.** A task running from Friday afternoon into Monday morning holds its crew through the intervening idle ticks. This is deliberate rather than a limitation — crews are not released to another foreman mid-pour — and it only becomes visible when resources on differing calendars share one task, which validation warns about.
 
@@ -288,6 +317,14 @@ The definition is total and never divides by zero, and this is provable rather t
 ## Validation rules (enforced by pydantic + a `validate_project` pass)
 
 The dependency graph restricted to leaves is acyclic. Every `Assignment` references existing task and resource ids, with `0 < demand <= capacity`. Milestones have zero duration; every other leaf task has `duration > 0`. Every task's effective calendar has at least one working tick within the planning horizon. `Project.epoch` is timezone-aware. Shift windows within a day are non-overlapping, ordered, and bounded by the day, and each ends after it starts; a non-working exception carries no shifts. Every shift boundary aligns to the project's tick grid, checked when the `CalendarIndex` is built. No calendar's daily working ticks exceed `ticksPerDay`. `PayRules` thresholds are positive and `weeklyRegularHours >= dailyRegularHours`. A `ProgressReport` may not set `actualFinish` before `actualStart`, nor report on a summary task; if it supplies both `percentComplete` and `remainingDuration`, they are reconciled in favour of `remainingDuration` at the boundary.
+
+Ids are unique within their kind, and every reference — a task's calendar, a resource's calendar and pay rules, a dependency's endpoints, an assignment's task and resource, the project's default calendar and pay rules — names something that exists. The WBS is a forest: no task is its own ancestor. Only leaves carry duration and assignments; a summary with a duration is an error rather than a value silently ignored. Every leaf that is not a milestone has a positive duration, and a deadline never precedes the epoch.
+
+Validation reports **every** problem it finds in one pass rather than stopping at the first. A scheduler importing a real project wants the list, and the eventual proposal gate needs all the reasons a proposal failed in order to explain itself.
+
+Validation produces a `ProjectIndex`: the derived, validated view holding the WBS tree, expanded leaf dependencies, computed `wbsPath`s, the planning horizon, and a cache of effective `CalendarIndex`es keyed by the calendars they are built from, so tasks sharing a trade and a crew share one. It is held separately from `Project` rather than cached on it, because the entities are frozen values and hanging a mutable cache off them would make an immutable object quietly stateful. Possessing an index is evidence the project passed.
+
+`planningHorizon` bounds calendar materialisation and is derived when absent, by growing until every effective calendar can supply the project's whole work content — tasks may be strictly sequential, so a horizon that fits the largest task can still fall short of the chain. Growth stops as soon as it stops buying working time, which is what turns a task whose calendars never agree into a named error rather than an unbounded search.
 
 A `Schedule` contains exactly one entry per leaf task — no more, no fewer. Every entry satisfies `start <= resumeAt <= finish` where `resumeAt` is set, and `W(finish) − W(resumeAt)` equals the work remaining at `dataDate`. `COMPLETE` entries finish at or before `dataDate`; `IN_PROGRESS` entries start at or before `dataDate` and resume at or after it; `PLANNED` entries start at or after it. `start` and `finish` both fall on working ticks of the task's effective calendar. A `ChangeSet`'s `added` and `removed` sets are disjoint, every `TaskMove` names a task present in both schedules, and every `added`/`removed` id is present in exactly one of them.
 

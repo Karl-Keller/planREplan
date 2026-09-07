@@ -225,6 +225,13 @@ class CalendarIndex:
         """
         if horizon < 0:
             raise ValueError("horizon must be non-negative")
+        try:
+            axis.to_datetime(horizon)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ValueError(
+                f"horizon {horizon} extends beyond a representable date at "
+                f"ticks_per_day={axis.ticks_per_day}"
+            ) from exc
         tz = axis.epoch.tzinfo
         runs: list[tuple[Tick, Tick]] = []
         day = axis.to_datetime(0).date()
