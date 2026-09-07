@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from planreplan.cpm import CpmError, analyse, forward_pass, topological_order
+from planreplan.cpm import CpmError, CpmHorizonError, analyse, forward_pass, topological_order
 from planreplan.domain import (
     Calendar,
     DayOfWeek,
@@ -305,11 +305,32 @@ def test_analysis_is_deterministic(project):
 @given(project=GENERATED)
 @SETTINGS
 def test_a_data_date_pushes_every_start_forward(project):
+    """Starting later never starts anything earlier.
+
+    The analysis is run against a widened horizon. A derived horizon is sized
+    for work beginning at tick zero, so moving the data date forward can leave
+    too little calendar behind it — which the engine reports rather than
+    silently truncating, and which the next test covers directly.
+    """
     index = validate_project(project)
     baseline = analyse(index)
-    later = analyse(index, data_date=index.horizon // 4)
+    roomy = validate_project(project.model_copy(update={"planning_horizon": index.horizon * 2}))
+    later = analyse(roomy, data_date=index.horizon // 4)
     for task_id, entry in later.tasks.items():
         assert entry.early_start >= baseline.tasks[task_id].early_start
+
+
+def test_a_horizon_too_short_for_the_data_date_is_reported_not_truncated():
+    """The failure the property test above found: name the knob, don't leak internals."""
+    project = build([task("a", 24)], [])
+    index = validate_project(project.model_copy(update={"planning_horizon": 200}))
+    with pytest.raises(CpmHorizonError, match="planning_horizon"):
+        analyse(index, data_date=190)
+
+
+def test_horizon_errors_are_cpm_errors():
+    """Callers catching CpmError should not have to know about the calendar."""
+    assert issubclass(CpmHorizonError, CpmError)
 
 
 @given(project=GENERATED)

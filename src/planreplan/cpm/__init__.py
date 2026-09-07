@@ -7,6 +7,7 @@ for the monitor to run on every progress update. Phase 1.
 
 from planreplan.cpm.engine import (
     CpmError,
+    CpmHorizonError,
     CpmResult,
     TaskFloat,
     analyse,
@@ -17,6 +18,7 @@ from planreplan.cpm.engine import (
 
 __all__ = [
     "CpmError",
+    "CpmHorizonError",
     "CpmResult",
     "TaskFloat",
     "analyse",

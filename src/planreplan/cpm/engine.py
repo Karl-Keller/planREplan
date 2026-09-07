@@ -33,6 +33,23 @@ class CpmError(ValueError):
     """The network cannot be analysed as given."""
 
 
+class CpmHorizonError(CpmError):
+    """The schedule does not fit inside the project's planning horizon.
+
+    A derived horizon is sized for work beginning at tick zero. Push the data
+    date forward, or add enough lag and precedence, and the remaining calendar
+    runs out — at which point the honest answer names the knob rather than
+    leaking a calendar internal from three frames down.
+    """
+
+
+def _horizon_failure(task_id: str, exc: ValueError) -> CpmHorizonError:
+    return CpmHorizonError(
+        f"task {task_id!r} does not fit inside the planning horizon ({exc}). "
+        "Set a larger planning_horizon on the project."
+    )
+
+
 class TaskFloat(BaseModel):
     """Early and late dates for one leaf task, with its floats."""
 
@@ -107,27 +124,37 @@ def forward_pass(index: ProjectIndex, *, data_date: Tick = 0) -> dict[str, tuple
 
     early: dict[str, tuple[Tick, Tick]] = {}
     for task_id in order:
-        calendar = index.effective_calendar(task_id)
-        duration = index.task(task_id).duration
-        earliest = calendar.next_working_tick(max(data_date, 0))
-        for link in incoming[task_id]:
-            predecessor_start, predecessor_finish = early[link.predecessor_id]
-            if link.kind is DependencyKind.FS:
-                candidate = calendar.next_working_tick(max(0, predecessor_finish + link.lag))
-            elif link.kind is DependencyKind.SS:
-                candidate = calendar.next_working_tick(max(0, predecessor_start + link.lag))
-            elif link.kind is DependencyKind.FF:
-                candidate = calendar.earliest_start_for_finish(
-                    predecessor_finish + link.lag, duration
-                )
-            else:  # SF: the predecessor's start bounds the successor's finish
-                candidate = calendar.earliest_start_for_finish(
-                    predecessor_start + link.lag, duration
-                )
-            earliest = max(earliest, candidate)
-        earliest = calendar.next_working_tick(earliest)
-        early[task_id] = (earliest, _finish(calendar, earliest, duration))
+        try:
+            early[task_id] = _early_dates(index, task_id, incoming[task_id], early, data_date)
+        except ValueError as exc:
+            raise _horizon_failure(task_id, exc) from exc
     return early
+
+
+def _early_dates(
+    index: ProjectIndex,
+    task_id: str,
+    incoming: Sequence[Dependency],
+    early: Mapping[str, tuple[Tick, Tick]],
+    data_date: Tick,
+) -> tuple[Tick, Tick]:
+    """Earliest start and finish for one task, given its predecessors."""
+    calendar = index.effective_calendar(task_id)
+    duration = index.task(task_id).duration
+    earliest = calendar.next_working_tick(max(data_date, 0))
+    for link in incoming:
+        predecessor_start, predecessor_finish = early[link.predecessor_id]
+        if link.kind is DependencyKind.FS:
+            candidate = calendar.next_working_tick(max(0, predecessor_finish + link.lag))
+        elif link.kind is DependencyKind.SS:
+            candidate = calendar.next_working_tick(max(0, predecessor_start + link.lag))
+        elif link.kind is DependencyKind.FF:
+            candidate = calendar.earliest_start_for_finish(predecessor_finish + link.lag, duration)
+        else:  # SF: the predecessor's start bounds the successor's finish
+            candidate = calendar.earliest_start_for_finish(predecessor_start + link.lag, duration)
+        earliest = max(earliest, candidate)
+    earliest = calendar.next_working_tick(earliest)
+    return earliest, _finish(calendar, earliest, duration)
 
 
 def _finish_bound(
@@ -176,26 +203,42 @@ def backward_pass(
 
     late: dict[str, tuple[Tick, Tick]] = {}
     for task_id in reversed(order):
-        calendar = index.effective_calendar(task_id)
-        task = index.task(task_id)
-        duration = task.duration
-
-        ceiling = project_finish
-        if task.deadline is not None:
-            ceiling = min(ceiling, task.deadline)
-        for link in outgoing[task_id]:
-            ceiling = min(ceiling, _finish_bound(calendar, link, late[link.successor_id], duration))
-        ceiling = max(0, min(ceiling, index.horizon))
-
-        latest_start = calendar.latest_start_for_finish(ceiling, duration)
-        if latest_start is None:
-            # The work cannot fit before the ceiling at all. The early start is
-            # the only start there is, and the unmeetable ceiling is retained as
-            # the late finish so the float below comes out negative.
-            late[task_id] = (early[task_id][0], ceiling)
-        else:
-            late[task_id] = (latest_start, _finish(calendar, latest_start, duration))
+        try:
+            late[task_id] = _late_dates(
+                index, task_id, outgoing[task_id], early, late, project_finish
+            )
+        except ValueError as exc:
+            raise _horizon_failure(task_id, exc) from exc
     return late
+
+
+def _late_dates(
+    index: ProjectIndex,
+    task_id: str,
+    outgoing: Sequence[Dependency],
+    early: Mapping[str, tuple[Tick, Tick]],
+    late: Mapping[str, tuple[Tick, Tick]],
+    project_finish: Tick,
+) -> tuple[Tick, Tick]:
+    """Latest start and finish for one task, given its successors."""
+    calendar = index.effective_calendar(task_id)
+    task = index.task(task_id)
+    duration = task.duration
+
+    ceiling = project_finish
+    if task.deadline is not None:
+        ceiling = min(ceiling, task.deadline)
+    for link in outgoing:
+        ceiling = min(ceiling, _finish_bound(calendar, link, late[link.successor_id], duration))
+    ceiling = max(0, min(ceiling, index.horizon))
+
+    latest_start = calendar.latest_start_for_finish(ceiling, duration)
+    if latest_start is None:
+        # The work cannot fit before the ceiling at all. The early start is the
+        # only start there is, and the unmeetable ceiling is kept as the late
+        # finish so the float comes out negative rather than zero.
+        return early[task_id][0], ceiling
+    return latest_start, _finish(calendar, latest_start, duration)
 
 
 def _free_float(
