@@ -16,11 +16,27 @@ Acceptance: property tests hold on generated projects — total float ≥ free f
 
 Delivered across five commits (calendars, entities and validation, overtime, persistence with the generator, CPM), plus two refinements the work forced on the design. Summary-level dependency expansion turned out to be exact only for some combinations of kind and side, so the rest are refused by name rather than silently over-constrained (`03`). And float is reported in **working ticks** rather than elapsed ones: a weekend is not float anybody can spend, and float is only comparable to duration — the comparison severity and deadline jeopardy both make — when the two share a unit.
 
-## Phase 2 — Resource-constrained scheduling
+## Phase 2 — Resource-constrained scheduling — *in progress*
 
 `solve/` CP-SAT scheduler: interval variables with start-dependent spans, cumulative resources, calendars via the working-time prefix relation of ADR-8, makespan objective; `SolveOptions` (time limit, seed, workers); `FeasibilityChecker` validating any schedule against a project. CLI: `planreplan solve`, `planreplan check`.
 
 Acceptance: on resource-unconstrained projects the solver's makespan equals CPM's; on the fixture with a capacity-1 crew shared by two parallel tasks, the solver serializes them; the checker rejects a schedule with a deliberately introduced overlap; two runs with the same seed produce identical schedules; a 500-task, 20-resource generated instance solves to feasibility within the default time limit at daily resolution. The same instance is benchmarked at hourly resolution and the result published in this document, whether or not it meets NFR2 — this is the phase where the ADR-8 performance risk is settled with numbers rather than argued.
+
+### Measured: 500 tasks, 20 resources, 10-second limit
+
+| | validate | greedy | CP-SAT | status |
+|---|---|---|---|---|
+| daily (`ticksPerDay=1`) | 3.2 s | 107 ticks in 0.02 s | 106 ticks, gap 21 | FEASIBLE |
+| hourly (`ticksPerDay=24`) | 7.4 s | 2534 ticks in 0.02 s | no improvement found | UNKNOWN |
+
+**Daily meets NFR2. Hourly does not**, and this is the honest answer the phase was meant to produce rather than avoid. At hourly resolution CP-SAT does not better the greedy serial schedule inside ten seconds on an instance this size, so what comes back is the greedy plan: feasible, calendar-correct, resource-correct, and not proven optimal. It is labelled UNKNOWN, never passed off as a solve.
+
+Two things the measurement exposed, both worth fixing before the numbers are worth re-taking:
+
+1. **Validation dominates the hourly budget.** 7.4 of the roughly 17 seconds is spent materialising calendars, because the derived horizon assumes the whole project could run strictly sequentially and so reaches about twelve years. A second pass that re-derives the horizon from the greedy makespan would cut it by most of an order of magnitude.
+2. **The greedy schedule is doing the real work.** It costs 20 ms and lands within 1 % of CP-SAT's best daily answer. That is a comment on the instance shape rather than on CP-SAT, but it means the honest default is to always compute it, which is now what happens.
+
+`ticksPerDay` remains the documented escape hatch, and it is a real one: the same project at daily resolution solves comfortably.
 
 ## Phase 3 — Monitor + repair (the point of the project)
 

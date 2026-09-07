@@ -11,6 +11,9 @@ from planreplan.domain import TimeAxis
 
 NY = ZoneInfo("America/New_York")
 EPOCH = datetime(2026, 9, 7, tzinfo=NY)  # a Monday, midnight local
+#: Coarser-than-hourly ticks only exist in a fixed-offset zone; see
+#: test_a_coarse_tick_is_refused_where_the_clock_changes.
+FIXED = datetime(2026, 9, 7, tzinfo=UTC)
 
 
 def test_epoch_must_be_timezone_aware():
@@ -25,7 +28,25 @@ def test_ticks_per_day_must_divide_a_day():
 
 @pytest.mark.parametrize(("per_day", "seconds"), [(1, 86_400), (8, 10_800), (24, 3_600), (96, 900)])
 def test_resolutions_give_whole_second_ticks(per_day, seconds):
-    assert TimeAxis(epoch=EPOCH, ticks_per_day=per_day).seconds_per_tick == seconds
+    assert TimeAxis(epoch=FIXED, ticks_per_day=per_day).seconds_per_tick == seconds
+
+
+@pytest.mark.parametrize("per_day", [1, 8])
+def test_a_coarse_tick_is_refused_where_the_clock_changes(per_day):
+    """A local day is 23 or 25 hours across a transition, so local midnight
+    stops landing on an absolute grid unless a tick divides an hour."""
+    with pytest.raises(ValueError, match="does not divide an hour"):
+        TimeAxis(epoch=EPOCH, ticks_per_day=per_day)
+
+
+@pytest.mark.parametrize("per_day", [1, 8])
+def test_the_same_tick_is_fine_in_a_fixed_offset_zone(per_day):
+    assert TimeAxis(epoch=FIXED, ticks_per_day=per_day).ticks_per_day == per_day
+
+
+@pytest.mark.parametrize("per_day", [24, 48, 96])
+def test_hourly_and_finer_survive_daylight_saving(per_day):
+    assert TimeAxis(epoch=EPOCH, ticks_per_day=per_day).ticks_per_day == per_day
 
 
 def test_tick_arithmetic_is_absolute_across_a_dst_transition():
@@ -74,7 +95,7 @@ def test_naive_moments_are_rejected():
 
 @given(tick=st.integers(min_value=-10_000, max_value=100_000), per_day=st.sampled_from([1, 24, 96]))
 def test_datetime_and_tick_round_trip(tick, per_day):
-    axis = TimeAxis(epoch=EPOCH, ticks_per_day=per_day)
+    axis = TimeAxis(epoch=FIXED, ticks_per_day=per_day)
     assert axis.to_tick_exact(axis.to_datetime(tick)) == tick
 
 

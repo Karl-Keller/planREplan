@@ -32,7 +32,7 @@ FR9 — LLM front-end (later phase). Translate natural-language inputs (daily re
 
 ## Non-functional requirements
 
-NFR1 — Determinism and reproducibility in the core (fixed seeds ⇒ identical outputs); NFR2 — solve/repair on a 500-task, 20-resource project completes interactively (target < 10 s on a laptop at daily resolution, with a documented time-limit/quality knob; hourly resolution multiplies the time dimension by 24, so its performance is measured and published in Phase 2 rather than promised here, and `ticksPerDay` is the documented coarsening knob); NFR3 — the domain model and CPM engine have zero solver dependencies; NFR4 — every schedule mutation is auditable via immutable schedules + ChangeSets; NFR5 — test coverage: CPM and repair invariants are property-tested; NFR6 — runs fully offline except the optional LLM adapter.
+NFR1 — Determinism and reproducibility in the core (fixed seeds ⇒ identical outputs); NFR2 — solve/repair on a 500-task, 20-resource project completes interactively (target < 10 s on a laptop at daily resolution, with a documented time-limit/quality knob; hourly resolution multiplies the time dimension by 24, and the Phase 2 measurement in `06-roadmap.md` shows it does *not* meet this target at 500 tasks: CP-SAT returns no improvement on a greedy serial schedule inside ten seconds. A feasible schedule is still always produced, and `ticksPerDay` is the documented coarsening knob); NFR3 — the domain model and CPM engine have zero solver dependencies; NFR4 — every schedule mutation is auditable via immutable schedules + ChangeSets; NFR5 — test coverage: CPM and repair invariants are property-tested; NFR6 — runs fully offline except the optional LLM adapter.
 
 ## Explicit non-goals (v1)
 

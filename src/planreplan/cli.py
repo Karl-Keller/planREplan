@@ -24,7 +24,7 @@ from planreplan.domain import (
     overtime_report,
     validate_project,
 )
-from planreplan.io import SchemaVersionError, load_project
+from planreplan.io import SchemaVersionError, load_project, save_schedule
 
 app = typer.Typer(
     name="planreplan",
@@ -128,6 +128,68 @@ def cpm(
     typer.echo()
     typer.echo(f"project finish  {when(result.project_finish)}")
     typer.secho(f"critical path   {' -> '.join(result.critical_path)}", fg=typer.colors.YELLOW)
+
+
+@app.command()
+def solve(
+    project: ProjectArg,
+    seconds: Annotated[float, typer.Option("--seconds", help="Solver time limit.", min=0.1)] = 10.0,
+    seed: Annotated[int, typer.Option(help="CP-SAT random seed.")] = 0,
+    workers: Annotated[
+        int, typer.Option(help="Search workers. More is faster and less reproducible.", min=1)
+    ] = 1,
+    save: Annotated[
+        bool, typer.Option("--save/--no-save", help="Store the schedule in the project.")
+    ] = False,
+) -> None:
+    """Produce a resource-feasible schedule minimising makespan.
+
+    Reports the status honestly: OPTIMAL and FEASIBLE come from CP-SAT, while
+    UNKNOWN means the time limit expired and the schedule shown is the greedy
+    serial one, which is feasible but unproven.
+    """
+    # Imported here, not at module scope: design rule 1 means `validate` and
+    # `cpm` must work on an install without OR-Tools, and a top-level import
+    # would break both to serve this one command.
+    try:
+        from planreplan.solve import CpSatScheduler, SolveError, SolveOptions
+    except ImportError as exc:  # pragma: no cover - exercised by the core-only CI job
+        typer.secho(
+            "solving needs OR-Tools, which this install does not have. "
+            'Install it with: pip install "planreplan[solve]"',
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(2) from exc
+
+    index = _load_and_validate(project)
+    options = SolveOptions(time_limit_seconds=seconds, seed=seed, workers=workers)
+    try:
+        result = CpSatScheduler(options).solve(index)
+    except SolveError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    axis = index.project.axis
+    relaxed = analyse(index).project_finish
+    finish = result.schedule.project_finish
+    colour = typer.colors.GREEN if result.is_optimal else typer.colors.YELLOW
+    typer.secho(f"{result.status}  in {result.wall_time:.2f}s", fg=colour)
+    if not result.is_proven:
+        typer.secho(
+            "  time limit reached; showing the greedy serial schedule, which is "
+            "feasible but not proven optimal",
+            fg=typer.colors.YELLOW,
+        )
+    typer.echo(f"  finish       {axis.to_datetime(finish):%Y-%m-%d %H:%M}  ({finish} ticks)")
+    typer.echo(f"  resource-free bound  {relaxed} ticks (CPM, ignores capacities)")
+    typer.echo(f"  cost of contention   {finish - relaxed} ticks")
+    if result.is_proven and not result.is_optimal:
+        typer.echo(f"  optimality gap       {result.gap} ticks")
+    typer.echo(f"  schedule     {result.schedule.id}")
+    if save:
+        path = save_schedule(result.schedule, Path(project))
+        typer.echo(f"  saved        {path}")
 
 
 @app.command()

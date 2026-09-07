@@ -227,3 +227,84 @@ def test_every_phase_one_command_is_documented(command, colour):
     result = runner.invoke(app, [command, "--help"])
     assert result.exit_code == 0
     assert "PROJECT" in plain(result.stdout)
+
+
+# -- solve -----------------------------------------------------------------
+
+
+def _contended_project():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from planreplan.domain import (
+        Assignment,
+        Calendar,
+        DayOfWeek,
+        Project,
+        Resource,
+        Shift,
+        Task,
+        TimeAxis,
+    )
+
+    calendar = Calendar(
+        id="5x8",
+        week_pattern=dict.fromkeys(
+            tuple(DayOfWeek)[:5], (Shift(name="day", start_minute=480, end_minute=960),)
+        ),
+    )
+    return Project(
+        id="contended",
+        axis=TimeAxis(epoch=datetime(2026, 9, 7, tzinfo=ZoneInfo("America/New_York"))),
+        calendars=(calendar,),
+        default_calendar_id="5x8",
+        tasks=tuple(Task(id=f"t{n}", duration=8) for n in range(4)),
+        resources=(Resource(id="crew", capacity=2),),
+        assignments=tuple(Assignment(task_id=f"t{n}", resource_id="crew") for n in range(4)),
+    )
+
+
+def test_solve_reports_the_cost_of_contention(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_contended_project(), tmp_path / "p")
+    result = runner.invoke(app, ["solve", str(tmp_path / "p")])
+    assert result.exit_code == 0
+    output = plain(result.stdout)
+    assert "OPTIMAL" in output
+    assert "cost of contention" in output
+
+
+def test_solve_can_store_the_schedule(tmp_path):
+    from planreplan.io import list_schedules, save_project
+
+    save_project(_contended_project(), tmp_path / "p")
+    result = runner.invoke(app, ["solve", str(tmp_path / "p"), "--save"])
+    assert result.exit_code == 0
+    assert len(list_schedules(tmp_path / "p")) == 1
+
+
+def test_solve_is_reproducible_across_invocations(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_contended_project(), tmp_path / "p")
+    args = ["solve", str(tmp_path / "p"), "--seed", "5"]
+    assert plain(runner.invoke(app, args).stdout) == plain(runner.invoke(app, args).stdout)
+
+
+def test_solve_says_when_a_schedule_is_unproven(tmp_path):
+    """An exhausted clock is reported as such, never as infeasibility."""
+    from planreplan.io import save_project
+
+    save_project(_contended_project(), tmp_path / "p")
+    result = runner.invoke(app, ["solve", str(tmp_path / "p"), "--seconds", "0.1"])
+    assert result.exit_code == 0
+    output = plain(result.stdout)
+    assert "finish" in output
+
+
+@pytest.mark.parametrize("command", ["validate", "cpm", "overtime", "solve"])
+def test_every_command_is_documented(command, colour):
+    result = runner.invoke(app, [command, "--help"])
+    assert result.exit_code == 0
+    assert "PROJECT" in plain(result.stdout)

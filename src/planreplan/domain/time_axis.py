@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, computed_field, field_validator, mod
 Tick = int
 
 SECONDS_PER_DAY: Final = 86_400
+SECONDS_PER_HOUR: Final = 3_600
 
 
 class TimeAxis(BaseModel):
@@ -77,6 +78,37 @@ class TimeAxis(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("epoch must be timezone-aware (see ADR-8)")
         return value
+
+    @model_validator(mode="after")
+    def _resolution_must_survive_daylight_saving(self) -> TimeAxis:
+        """A tick must divide an hour wherever the clock changes.
+
+        Ticks are absolute and uniform, which is the point of ADR-8. Local days
+        are not: across a transition one is 23 hours and another 25. So local
+        midnight only keeps landing on the tick grid when a tick divides an
+        hour — true at 24, 48, or 96 ticks per day, false at 8 or 1.
+
+        Coarser resolutions remain available in a zone with a fixed offset,
+        which is the honest trade: uniform physical ticks, or local days that
+        occasionally are not days. Refusing here turns what would otherwise be
+        an obscure alignment failure six months into a project's calendar into
+        a message at the moment the axis is defined.
+        """
+        if SECONDS_PER_HOUR % self.seconds_per_tick == 0 or not self._observes_daylight_saving():
+            return self
+        raise ValueError(
+            f"ticks_per_day={self.ticks_per_day} gives a tick of {self.seconds_per_tick}s, "
+            f"which does not divide an hour, and {self.epoch.tzinfo} changes its clock. "
+            "Use 24, 48, or 96 ticks per day in a daylight-saving zone, or a "
+            "fixed-offset zone such as UTC for coarser resolutions."
+        )
+
+    def _observes_daylight_saving(self) -> bool:
+        """Whether the epoch's zone shifts its offset during the epoch's year."""
+        offsets = {
+            self.epoch.replace(month=month, day=1, hour=12).utcoffset() for month in (1, 4, 7, 10)
+        }
+        return len(offsets) > 1
 
     @field_validator("ticks_per_day")
     @classmethod

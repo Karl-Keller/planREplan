@@ -1,6 +1,6 @@
 """Overtime aggregation: thresholds as data, resource-week attribution, no pyramiding."""
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -282,7 +282,8 @@ def test_idle_time_inside_a_span_is_not_paid():
 
 
 def test_an_axis_that_cannot_express_an_hour_is_refused():
-    daily = TimeAxis(epoch=datetime(2026, 9, 7, tzinfo=NY), ticks_per_day=1)
+    # UTC because a daily tick cannot exist in a zone that changes its clock.
+    daily = TimeAxis(epoch=datetime(2026, 9, 7, tzinfo=UTC), ticks_per_day=1)
     project = Project(
         id="p",
         axis=daily,

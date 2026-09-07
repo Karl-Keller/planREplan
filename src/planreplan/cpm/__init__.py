@@ -12,6 +12,7 @@ from planreplan.cpm.engine import (
     TaskFloat,
     analyse,
     backward_pass,
+    earliest_dates,
     forward_pass,
     topological_order,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "TaskFloat",
     "analyse",
     "backward_pass",
+    "earliest_dates",
     "forward_pass",
     "topological_order",
 ]

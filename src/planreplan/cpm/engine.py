@@ -148,20 +148,25 @@ def forward_pass(index: ProjectIndex, *, data_date: Tick = 0) -> dict[str, tuple
     early: dict[str, tuple[Tick, Tick]] = {}
     for task_id in order:
         try:
-            early[task_id] = _early_dates(index, task_id, incoming[task_id], early, data_date)
+            early[task_id] = earliest_dates(index, task_id, incoming[task_id], early, data_date)
         except ValueError as exc:
             raise _horizon_failure(task_id, exc) from exc
     return early
 
 
-def _early_dates(
+def earliest_dates(
     index: ProjectIndex,
     task_id: str,
     incoming: Sequence[Dependency],
     early: Mapping[str, tuple[Tick, Tick]],
     data_date: Tick,
 ) -> tuple[Tick, Tick]:
-    """Earliest start and finish for one task, given its predecessors."""
+    """Earliest start and finish for one task, given its placed predecessors.
+
+    Public because a greedy scheduler needs precisely this arithmetic: all four
+    kinds are lower bounds on the successor, so a resource-driven push later
+    can never break one.
+    """
     calendar = index.effective_calendar(task_id)
     duration = index.task(task_id).duration
     earliest = calendar.next_working_tick(max(data_date, 0))
