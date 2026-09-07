@@ -53,7 +53,11 @@ def _blocking_release(
 
 
 def greedy_schedule(index: ProjectIndex, *, data_date: Tick = 0) -> Schedule:
-    """A feasible schedule, or ``GreedyError`` if the horizon cannot hold one."""
+    """A feasible schedule, or ``GreedyError`` if the horizon cannot hold one.
+
+    Takes the horizon it is given rather than growing one, so it stays a pure
+    function of the index. ``solve.fitted_index`` is the growing path.
+    """
     relaxed = analyse(index, data_date=data_date)
     incoming: dict[str, list[Dependency]] = {task_id: [] for task_id in index.leaves}
     for link in index.leaf_dependencies:
@@ -100,8 +104,10 @@ def greedy_schedule(index: ProjectIndex, *, data_date: Tick = 0) -> Schedule:
                 finish = start + calendar.span(start, duration)
             except ValueError as exc:
                 raise GreedyError(
-                    f"task {task_id!r} cannot be placed before the planning horizon ends; "
-                    "widen planning_horizon or relax a resource capacity"
+                    f"task {task_id!r} cannot be placed before the planning horizon ends. "
+                    "Validation sizes the horizon to the network's longest chain, which "
+                    "contention runs past; call solve.fitted_index to widen it, or set "
+                    "planning_horizon explicitly."
                 ) from exc
 
         placed[task_id] = (start, finish)

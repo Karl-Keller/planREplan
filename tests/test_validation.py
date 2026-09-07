@@ -316,12 +316,27 @@ def test_effective_calendars_are_cached_by_calendar_not_by_task():
 # -- horizon ---------------------------------------------------------------
 
 
-def test_the_horizon_is_derived_wide_enough_for_the_whole_chain():
-    """Tasks may be strictly sequential, so each calendar must fit the total."""
+def test_the_horizon_is_derived_from_the_longest_chain_not_the_sequential_sum():
+    """Twenty independent tasks are one task long, not twenty.
+
+    A horizon big enough to run a project strictly one task at a time is
+    enormous and almost never needed; materialising calendars across it was the
+    dominant cost of validating a large project. Resource contention is
+    accounted for by `solve.fitted_index`, not here — a calendar horizon is not
+    a schedule bound.
+    """
     tasks = tuple(Task(id=f"t{n}", duration=8) for n in range(20))
     index = validate_project(make(tasks=tasks, dependencies=()))
-    required = sum(t.duration for t in tasks)
-    assert index.effective_calendar("t0").total_work >= required
+    available = index.effective_calendar("t0").total_work
+    assert available >= 8  # the chain
+    assert available < sum(t.duration for t in tasks)  # not the sum
+
+
+def test_a_chain_of_dependencies_does_widen_the_horizon():
+    tasks = tuple(Task(id=f"t{n}", duration=8) for n in range(6))
+    links = tuple(Dependency(predecessor_id=f"t{n}", successor_id=f"t{n + 1}") for n in range(5))
+    index = validate_project(make(tasks=tasks, dependencies=links))
+    assert index.effective_calendar("t0").total_work >= 48
 
 
 def test_an_explicit_horizon_is_respected():

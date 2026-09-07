@@ -21,7 +21,7 @@ from planreplan.domain import (
     TimeAxis,
     validate_project,
 )
-from planreplan.solve import CpSatScheduler, SolveOptions, greedy_schedule
+from planreplan.solve import CpSatScheduler, SolveOptions, fitted_index
 from strategies import projects
 
 NY = ZoneInfo("America/New_York")
@@ -131,7 +131,7 @@ def test_the_greedy_schedule_is_feasible_on_its_own():
         resources=[Resource(id="crew", capacity=1)],
         assignments=[Assignment(task_id=f"t{n}", resource_id="crew") for n in range(4)],
     )
-    schedule = greedy_schedule(validate_project(project))
+    schedule = fitted_index(validate_project(project))[1]
     spans = sorted(schedule.spans().values())
     assert all(a[1] <= b[0] for a, b in pairwise(spans))
 
@@ -143,7 +143,7 @@ def test_greedy_never_beats_the_optimum():
         assignments=[Assignment(task_id=f"t{n}", resource_id="crew") for n in range(5)],
     )
     index = validate_project(project)
-    assert greedy_schedule(index).project_finish >= solve(project).schedule.project_finish
+    assert fitted_index(index)[1].project_finish >= solve(project).schedule.project_finish
 
 
 def test_an_exhausted_time_limit_returns_a_real_schedule_not_a_shrug():
@@ -242,3 +242,50 @@ def test_solving_is_deterministic(project):
 def test_worker_count_is_configurable(workers):
     project = build([task("a", 8)])
     assert solve(project, SolveOptions(workers=workers)).schedule.entries["a"].start == 8
+
+
+# -- horizon fitting -------------------------------------------------------
+
+
+def test_fitting_widens_a_horizon_sized_only_for_the_chain():
+    """Validation sizes for CPM; contention needs more, and greedy says how much."""
+    project = build(
+        [task(f"t{n}", 8) for n in range(8)],
+        resources=[Resource(id="crew", capacity=1)],
+        assignments=[Assignment(task_id=f"t{n}", resource_id="crew") for n in range(8)],
+    )
+    index = validate_project(project)
+    fitted, schedule = fitted_index(index)
+    assert fitted.horizon > index.horizon
+    assert schedule.project_finish <= fitted.horizon
+
+
+def test_fitting_leaves_an_explicit_horizon_alone():
+    """A stated planning_horizon means what it says; widening it silently would
+    make the field advisory."""
+    project = build([task("a", 8)]).model_copy(update={"planning_horizon": 24 * 90})
+    index = validate_project(project)
+    fitted, _ = fitted_index(index)
+    assert fitted.horizon == 24 * 90
+
+
+def test_a_fitted_horizon_is_not_wastefully_wide():
+    project = build(
+        [task(f"t{n}", 8) for n in range(4)],
+        resources=[Resource(id="crew", capacity=1)],
+        assignments=[Assignment(task_id=f"t{n}", resource_id="crew") for n in range(4)],
+    )
+    fitted, schedule = fitted_index(validate_project(project))
+    assert fitted.horizon <= schedule.project_finish * 4
+
+
+def test_solving_fits_the_horizon_without_being_asked():
+    """A caller should not have to know the horizon needs widening first."""
+    project = build(
+        [task(f"t{n}", 8) for n in range(10)],
+        resources=[Resource(id="crew", capacity=1)],
+        assignments=[Assignment(task_id=f"t{n}", resource_id="crew") for n in range(10)],
+    )
+    result = solve(project)
+    assert len(result.schedule.entries) == 10
+    assert result.schedule.project_finish >= 10 * 8

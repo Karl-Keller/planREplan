@@ -26,6 +26,30 @@ from planreplan.domain.entities import (
 )
 from planreplan.domain.time_axis import Tick
 
+
+def topological_order(nodes: Sequence[str], links: Sequence[Dependency]) -> tuple[str, ...]:
+    """Kahn's algorithm over the leaf network.
+
+    Duplicated from ``cpm`` rather than imported: dependencies point inward,
+    and ``domain`` importing ``cpm`` would invert that for eight lines.
+    """
+    incoming = dict.fromkeys(nodes, 0)
+    successors: dict[str, list[str]] = {node: [] for node in nodes}
+    for link in links:
+        successors[link.predecessor_id].append(link.successor_id)
+        incoming[link.successor_id] += 1
+    ready = [node for node in nodes if not incoming[node]]
+    ordered: list[str] = []
+    while ready:
+        node = ready.pop()
+        ordered.append(node)
+        for successor in successors[node]:
+            incoming[successor] -= 1
+            if not incoming[successor]:
+                ready.append(successor)
+    return tuple(ordered)
+
+
 #: Ceiling on horizon doubling. Reached only by a calendar so sparse that the
 #: work cannot fit in any sane span, which is a modelling error worth naming.
 _MAX_HORIZON_DOUBLINGS = 32
@@ -382,11 +406,33 @@ def _wbs_cycle_problems(project: Project) -> list[str]:
     return problems
 
 
-def _total_work_required(project: Project, leaves: Sequence[str]) -> int:
-    by_id = {t.id: t for t in project.tasks}
-    work = sum(by_id[task_id].duration for task_id in leaves)
-    lag = sum(max(0, d.lag) for d in project.dependencies)
-    return work + lag
+def _critical_chain_work(
+    project: Project, links: Sequence[Dependency], leaves: Sequence[str]
+) -> int:
+    """Longest path of durations and positive lags through the leaf network.
+
+    This is what the horizon must supply for CPM to have room, and it is
+    dramatically smaller than the whole project's work: on a 500-task instance
+    the chain was 503 working ticks against 6708 for the sequential sum, and
+    materialising calendars over the difference cost seconds.
+
+    It is deliberately *not* an upper bound on a resource-feasible schedule —
+    contention pushes work past the chain, sometimes far past it. Sizing to a
+    real schedule is `solve.fitted_index`, which runs one and grows if needed.
+    Validation only needs room for the network itself.
+    """
+    durations = {task.id: task.duration for task in project.tasks}
+    successors: dict[str, list[tuple[str, int]]] = {task_id: [] for task_id in leaves}
+    for link in links:
+        successors[link.predecessor_id].append((link.successor_id, max(0, link.lag)))
+
+    longest: dict[str, int] = {}
+    for task_id in reversed(topological_order(leaves, links)):
+        best = durations[task_id]
+        for successor, lag in successors[task_id]:
+            best = max(best, durations[task_id] + lag + longest[successor])
+        longest[task_id] = best
+    return max(longest.values(), default=0)
 
 
 def _min_working_time(project: Project, dependencies: tuple[Dependency, ...], horizon: Tick) -> int:
@@ -403,11 +449,14 @@ def _derive_horizon(project: Project, dependencies: tuple[Dependency, ...], requ
     nobody wants to guess, while an explicit ``planning_horizon`` stays
     available for a project that knows its own end.
 
-    The test is that *every* effective calendar can supply the whole project's
-    work, not merely each task's own. Tasks may be strictly sequential, so a
-    horizon that fits the largest task can still fall short of the chain; being
-    generous costs a few hundred blocks and being wrong costs a spurious
-    failure.
+    The requirement is the network's longest chain, not the sequential sum of
+    every task. A horizon big enough to run the whole project one task at a
+    time is enormous and almost never needed, and materialising calendars
+    across it was the single largest cost in validating a large project.
+
+    That leaves resource contention unaccounted for, which is correct: a
+    calendar horizon is not a schedule bound. `solve.fitted_index` sizes one
+    from an actual schedule and grows if that schedule does not fit.
 
     Doubling stops as soon as it stops buying working time. A task whose
     calendars never agree has an empty effective calendar, and no horizon
@@ -467,7 +516,7 @@ def validate_project(project: Project) -> ProjectIndex:
     links = tuple(expanded)
     leaves = ProjectIndex(project, 1, links).leaves
     horizon = project.planning_horizon or _derive_horizon(
-        project, links, _total_work_required(project, leaves)
+        project, links, _critical_chain_work(project, links, leaves)
     )
     index = ProjectIndex(project, horizon, links)
 

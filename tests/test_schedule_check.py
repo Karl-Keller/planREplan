@@ -24,7 +24,7 @@ from planreplan.domain import (
     check_schedule,
     validate_project,
 )
-from planreplan.solve import CpSatScheduler, SolveOptions, greedy_schedule
+from planreplan.solve import CpSatScheduler, SolveOptions, fitted_index
 from strategies import projects
 
 NY = ZoneInfo("America/New_York")
@@ -205,12 +205,12 @@ def test_what_the_solver_produces_the_checker_accepts(project):
 def test_the_greedy_schedule_also_passes(project):
     """The fallback is a real plan, not a placeholder."""
     index = validate_project(project)
-    assert check_schedule(index, greedy_schedule(index)) == ()
+    assert check_schedule(index, fitted_index(index)[1]) == ()
 
 
 @given(project=GENERATED)
 @SETTINGS
 def test_checking_needs_no_solver_state(project):
     index = validate_project(project)
-    schedule = greedy_schedule(index)
+    schedule = fitted_index(index)[1]
     assert check_schedule(index, schedule) == check_schedule(index, schedule)

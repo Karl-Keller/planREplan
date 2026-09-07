@@ -25,7 +25,7 @@ from planreplan.domain.entities import DependencyKind
 from planreplan.domain.schedule import EntryState, Schedule, ScheduleEntry
 from planreplan.domain.time_axis import Tick
 from planreplan.domain.validation import ProjectIndex
-from planreplan.solve.greedy import greedy_schedule
+from planreplan.solve.horizon import fitted_index
 from planreplan.solve.options import SolveOptions
 
 
@@ -115,11 +115,11 @@ class CpSatScheduler:
         A greedy serial schedule is built first and used three ways: as the
         upper bound for every variable domain and span table, as the solver's
         starting hint, and as the answer when the time limit expires before
-        CP-SAT has proved anything. The planning horizon is sized for
-        calendars, not for schedules, so bounding by it instead would enumerate
-        span tables across years a task will never occupy.
+        CP-SAT has proved anything. It also sizes the horizon: validation
+        leaves it at the network's longest chain, which is what CPM needs and
+        less than a contended schedule occupies.
         """
-        fallback = greedy_schedule(index, data_date=data_date)
+        index, fallback = fitted_index(index, data_date=data_date)
         upper = min(fallback.project_finish, index.horizon)
         relaxed = analyse(index, data_date=data_date)
 

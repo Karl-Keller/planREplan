@@ -16,6 +16,7 @@ from planreplan.solve.cpsat import (
     SolveResult,
 )
 from planreplan.solve.greedy import GreedyError, greedy_schedule
+from planreplan.solve.horizon import fitted_index
 from planreplan.solve.options import SolveOptions
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "SolveError",
     "SolveOptions",
     "SolveResult",
+    "fitted_index",
     "greedy_schedule",
 ]

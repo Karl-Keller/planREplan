@@ -26,17 +26,21 @@ Acceptance: on resource-unconstrained projects the solver's makespan equals CPM'
 
 ### Measured: 500 tasks, 20 resources, 10-second limit
 
-| | validate | greedy | CP-SAT | status |
-|---|---|---|---|---|
-| daily (`ticksPerDay=1`) | 3.2 s | 107 ticks in 0.02 s | 106 ticks, gap 21 | FEASIBLE |
-| hourly (`ticksPerDay=24`) | 7.4 s | 2534 ticks in 0.02 s | no improvement found | UNKNOWN |
+| | horizon | validate | greedy | CP-SAT | status |
+|---|---|---|---|---|---|
+| daily (`ticksPerDay=1`) | 232 | 0.20 s | 107 ticks in 0.02 s | 106 ticks, gap 21 | FEASIBLE |
+| hourly (`ticksPerDay=24`) | 8048 | 0.49 s | 2534 ticks in 0.02 s | no improvement found | UNKNOWN |
 
-**Daily meets NFR2. Hourly does not**, and this is the honest answer the phase was meant to produce rather than avoid. At hourly resolution CP-SAT does not better the greedy serial schedule inside ten seconds on an instance this size, so what comes back is the greedy plan: feasible, calendar-correct, resource-correct, and not proven optimal. It is labelled UNKNOWN, never passed off as a solve.
+**Daily meets NFR2. Hourly still does not**, and this is the honest answer the phase was meant to produce rather than avoid. At hourly resolution CP-SAT does not better the greedy serial schedule inside ten seconds on an instance this size, so what comes back is the greedy plan: feasible, calendar-correct, resource-correct, and not proven optimal. It is labelled UNKNOWN, never passed off as a solve.
 
-Two things the measurement exposed, both worth fixing before the numbers are worth re-taking:
+What *is* now fast is everything around the solve. A feasible schedule exists 0.5 s after loading the project; the remaining ten seconds are CP-SAT spending its budget without finding anything better. Set a shorter limit and the same plan arrives sooner.
 
-1. **Validation dominates the hourly budget.** 7.4 of the roughly 17 seconds is spent materialising calendars, because the derived horizon assumes the whole project could run strictly sequentially and so reaches about twelve years. A second pass that re-derives the horizon from the greedy makespan would cut it by most of an order of magnitude.
-2. **The greedy schedule is doing the real work.** It costs 20 ms and lands within 1 % of CP-SAT's best daily answer. That is a comment on the instance shape rather than on CP-SAT, but it means the honest default is to always compute it, which is now what happens.
+An earlier run of this benchmark spent 7.4 s of the hourly budget on validation alone, because the horizon derivation demanded room to run the whole project strictly one task at a time — 6708 working ticks where the network's longest chain is 503, giving a horizon of about twelve years. Sizing validation to the chain and fitting a scheduling horizon from an actual greedy schedule cut it to 0.49 s and the horizon by 13×, with identical makespans. The remaining shortfall is CP-SAT's search, not the model around it.
+
+Two things the measurement still says:
+
+1. **The greedy schedule is doing the real work.** It costs 20 ms and lands within 1 % of CP-SAT's best daily answer. That is a comment on the instance shape rather than on CP-SAT, but it means the honest default is to always compute it, which is what happens.
+2. **Optimality is out of reach at this size.** Even daily leaves a gap of 21 unproven after ten seconds.
 
 `ticksPerDay` remains the documented escape hatch, and it is a real one: the same project at daily resolution solves comfortably.
 
