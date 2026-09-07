@@ -36,7 +36,9 @@ flowchart TB
 
 The load-bearing boundaries:
 
-1. **Solver isolation.** Only `solve/` imports `ortools`. It exposes `Scheduler` (build model → solve → extract `Schedule`) and `FeasibilityChecker` (validate a schedule or proposal against constraints). Everything else works with domain objects. This keeps the domain testable without OR-Tools, and keeps the seam open for an alternative backend (e.g., a PDDL/unified-planning adapter) without touching callers.
+1. **Solver isolation.** Only `solve/` imports `ortools`. It exposes `Scheduler` (build model → solve → extract `Schedule`). Everything else works with domain objects.
+
+   Verification is *not* in `solve/`. This document originally made `FeasibilityChecker` a second face of the CP-SAT adapter, which conflated two different questions. Asking whether a project is satisfiable at all is a search and needs a solver. Asking whether a *given* schedule obeys the rules is a linear sweep over coverage, calendars, precedence, capacity, and the data date — so `check_schedule` lives in `domain/`, needs no OR-Tools, and makes rule 1 stronger rather than weaker. The monitor can then verify a plan on every progress update, and ADR-6's proposal gate can reject an LLM's suggestion without paying for a solve. This keeps the domain testable without OR-Tools, and keeps the seam open for an alternative backend (e.g., a PDDL/unified-planning adapter) without touching callers.
 2. **The proposal gate.** `llm/` can only emit typed proposal objects (`ProgressReport`, `DisruptionEvent`, `ScopeChange` drafts). These pass through domain validation, then `FeasibilityChecker`, before the monitor treats them as facts. The LLM-Modulo pattern as a type system.
 3. **Immutable schedules.** `Schedule` values are frozen; `repair/` returns `(new_schedule, change_set, churn_metrics)`. History is a sequence of schedules linked by ChangeSets — an audit trail by construction.
 
@@ -49,9 +51,9 @@ classDiagram
     <<interface>>
     +solve(Project, SolveOptions) Schedule
   }
-  class FeasibilityChecker {
-    <<interface>>
-    +check(Project, Schedule) list~Violation~
+  class ScheduleChecker {
+    <<domain, solver-free>>
+    +checkSchedule(ProjectIndex, Schedule) list~Violation~
   }
   class CpSatScheduler {
     -buildModel(Project) CpModel
@@ -89,7 +91,7 @@ classDiagram
     +narrate(ChangeSet) str
   }
   Scheduler <|.. CpSatScheduler
-  FeasibilityChecker <|.. CpSatScheduler
+  ExecutionMonitor ..> ScheduleChecker : verifies plans with
   RepairEngine --> Scheduler : re-solves via
   RepairEngine --> RepairPolicy
   RepairEngine --> RepairResult : returns

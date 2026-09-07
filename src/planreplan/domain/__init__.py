@@ -41,6 +41,7 @@ from planreplan.domain.schedule import (
     Schedule,
     ScheduleEntry,
 )
+from planreplan.domain.schedule_check import Violation, ViolationKind, check_schedule
 from planreplan.domain.time_axis import Tick, TimeAxis
 from planreplan.domain.validation import (
     ProjectIndex,
@@ -75,7 +76,10 @@ __all__ = [
     "TaskStatus",
     "Tick",
     "TimeAxis",
+    "Violation",
+    "ViolationKind",
     "WorkBlock",
+    "check_schedule",
     "overtime_report",
     "validate_project",
 ]

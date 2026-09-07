@@ -4,7 +4,7 @@ A construction planning and management tool built on a contrarian-but-old idea: 
 
 ## Status
 
-Phases 0 (scaffolding) and 1 (domain model, calendars, overtime, persistence, CPM) are complete; Phase 2 (resource-constrained scheduling with CP-SAT) is next. `planreplan validate`, `planreplan cpm`, and `planreplan overtime` work today. The `docs/` directory is the source of truth; implementation proceeds by the phases in `docs/06-roadmap.md`, built by Claude Code with a second Claude instance as design reviewer.
+Phases 0 (scaffolding), 1 (domain model, calendars, overtime, persistence, CPM) and 2 (CP-SAT scheduling, schedules, verification) are complete; Phase 3 (monitor and repair — the point of the project) is next. `validate`, `cpm`, `overtime`, `solve`, and `check` work today. The `docs/` directory is the source of truth; implementation proceeds by the phases in `docs/06-roadmap.md`, built by Claude Code with a second Claude instance as design reviewer.
 
 ## Documents
 

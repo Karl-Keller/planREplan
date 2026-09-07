@@ -21,10 +21,18 @@ from planreplan.domain import (
     PayClass,
     ProjectIndex,
     ProjectValidationError,
+    Schedule,
+    check_schedule,
     overtime_report,
     validate_project,
 )
-from planreplan.io import SchemaVersionError, load_project, save_schedule
+from planreplan.io import (
+    SchemaVersionError,
+    list_schedules,
+    load_project,
+    load_schedule,
+    save_schedule,
+)
 
 app = typer.Typer(
     name="planreplan",
@@ -190,6 +198,59 @@ def solve(
     if save:
         path = save_schedule(result.schedule, Path(project))
         typer.echo(f"  saved        {path}")
+
+
+@app.command()
+def check(
+    project: ProjectArg,
+    schedule_id: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="[SCHEDULE]",
+            help="Stored schedule id. Defaults to the only one, if there is only one.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Verify a stored schedule against the project's rules.
+
+    Needs no solver: checking a concrete schedule is a linear sweep over
+    coverage, calendars, precedence, capacity, and the data date. Exits 1 if
+    the schedule is not executable as written.
+    """
+    index = _load_and_validate(project)
+    stored = list_schedules(Path(project))
+    if schedule_id is None:
+        if len(stored) != 1:
+            typer.secho(
+                f"name a schedule; {len(stored)} are stored" if stored else "no schedules stored",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            for identifier in stored:
+                typer.echo(f"  {identifier}", err=True)
+            raise typer.Exit(2)
+        schedule_id = stored[0]
+
+    try:
+        plan: Schedule = load_schedule(Path(project), schedule_id)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+
+    violations = check_schedule(index, plan)
+    if not violations:
+        typer.secho(f"{schedule_id} is executable as written.", fg=typer.colors.GREEN)
+        return
+    count = len(violations)
+    typer.secho(
+        f"{count} violation{'s' if count != 1 else ''} in {schedule_id}:",
+        fg=typer.colors.RED,
+        err=True,
+    )
+    for violation in violations:
+        typer.echo(f"  [{violation.kind}] {violation.detail}", err=True)
+    raise typer.Exit(1)
 
 
 @app.command()

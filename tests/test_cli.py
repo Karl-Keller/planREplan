@@ -1,5 +1,6 @@
 """Phase 0 acceptance: the CLI exists, reports its version, and documents itself."""
 
+import pathlib
 import re
 
 import pytest
@@ -308,3 +309,46 @@ def test_every_command_is_documented(command, colour):
     result = runner.invoke(app, [command, "--help"])
     assert result.exit_code == 0
     assert "PROJECT" in plain(result.stdout)
+
+
+# -- check -----------------------------------------------------------------
+
+
+def test_check_accepts_a_solved_schedule(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_contended_project(), tmp_path / "p")
+    runner.invoke(app, ["solve", str(tmp_path / "p"), "--save"])
+    result = runner.invoke(app, ["check", str(tmp_path / "p")])
+    assert result.exit_code == 0
+    assert "executable as written" in plain(result.stdout)
+
+
+def test_check_rejects_an_overlapping_schedule(tmp_path):
+    from planreplan.domain import Schedule, ScheduleEntry
+    from planreplan.io import save_project, save_schedule
+
+    save_project(_contended_project(), tmp_path / "p")
+    overlapped = Schedule(
+        project_finish=16,
+        entries={f"t{n}": ScheduleEntry(task_id=f"t{n}", start=8, finish=16) for n in range(4)},
+    )
+    save_schedule(overlapped, tmp_path / "p")
+    result = runner.invoke(app, ["check", str(tmp_path / "p"), overlapped.id])
+    assert result.exit_code == 1
+    assert "resource_overload" in plain(result.output)
+
+
+def test_check_asks_which_schedule_when_several_are_stored(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_contended_project(), tmp_path / "p")
+    assert runner.invoke(app, ["check", str(tmp_path / "p")]).exit_code == 2
+
+
+def test_check_needs_no_solver_import(tmp_path):
+    """Design rule 1: verification is a sweep, not a search."""
+    import planreplan.domain.schedule_check as module
+
+    source = pathlib.Path(module.__file__).read_text()
+    assert "ortools" not in source

@@ -16,9 +16,11 @@ Acceptance: property tests hold on generated projects — total float ≥ free f
 
 Delivered across five commits (calendars, entities and validation, overtime, persistence with the generator, CPM), plus two refinements the work forced on the design. Summary-level dependency expansion turned out to be exact only for some combinations of kind and side, so the rest are refused by name rather than silently over-constrained (`03`). And float is reported in **working ticks** rather than elapsed ones: a weekend is not float anybody can spend, and float is only comparable to duration — the comparison severity and deadline jeopardy both make — when the two share a unit.
 
-## Phase 2 — Resource-constrained scheduling — *in progress*
+## Phase 2 — Resource-constrained scheduling — **done**
 
-`solve/` CP-SAT scheduler: interval variables with start-dependent spans, cumulative resources, calendars via the working-time prefix relation of ADR-8, makespan objective; `SolveOptions` (time limit, seed, workers); `FeasibilityChecker` validating any schedule against a project. CLI: `planreplan solve`, `planreplan check`.
+`solve/` CP-SAT scheduler: interval variables with start-dependent spans, cumulative resources, calendars via the working-time prefix relation of ADR-8, makespan objective; `SolveOptions` (time limit, seed, workers); schedule verification against a project. CLI: `planreplan solve`, `planreplan check`.
+
+Verification landed in `domain/` rather than `solve/`, and `02-architecture.md` is updated to match: checking a concrete schedule is a linear sweep, not a search, so it needs no solver and the monitor can run it on every update.
 
 Acceptance: on resource-unconstrained projects the solver's makespan equals CPM's; on the fixture with a capacity-1 crew shared by two parallel tasks, the solver serializes them; the checker rejects a schedule with a deliberately introduced overlap; two runs with the same seed produce identical schedules; a 500-task, 20-resource generated instance solves to feasibility within the default time limit at daily resolution. The same instance is benchmarked at hourly resolution and the result published in this document, whether or not it meets NFR2 — this is the phase where the ADR-8 performance risk is settled with numbers rather than argued.
 
