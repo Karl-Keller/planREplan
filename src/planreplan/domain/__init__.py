@@ -29,6 +29,12 @@ from planreplan.domain.entities import (
     Task,
     TaskStatus,
 )
+from planreplan.domain.overtime import (
+    OvertimeReport,
+    OvertimeResolutionError,
+    Span,
+    overtime_report,
+)
 from planreplan.domain.time_axis import Tick, TimeAxis
 from planreplan.domain.validation import (
     ProjectIndex,
@@ -45,6 +51,8 @@ __all__ = [
     "Dependency",
     "DependencyKind",
     "Endpoint",
+    "OvertimeReport",
+    "OvertimeResolutionError",
     "PayClass",
     "PayRules",
     "Project",
@@ -52,10 +60,12 @@ __all__ = [
     "ProjectValidationError",
     "Resource",
     "Shift",
+    "Span",
     "Task",
     "TaskStatus",
     "Tick",
     "TimeAxis",
     "WorkBlock",
+    "overtime_report",
     "validate_project",
 ]

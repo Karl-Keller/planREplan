@@ -82,6 +82,8 @@ classDiagram
     +weekPattern map~DayOfWeek,Shifts~
     +exceptions list~CalendarException~
     +shiftsOn(date) Shifts
+    +shiftAt(date, minute) Shift
+    +isHoliday(date) bool
   }
   class CalendarIndex {
     +horizon int
@@ -108,6 +110,7 @@ classDiagram
   class CalendarException {
     +window Window
     +working bool
+    +holiday bool
     +shifts Shifts
     +reason
   }
@@ -116,16 +119,18 @@ classDiagram
     +weekStartsOn DayOfWeek
     +dailyRegularHours int
     +weeklyRegularHours int
+    +dailyOvertimeMultiplier float
+    +weeklyOvertimeMultiplier float
     +dayPremiums map~DayOfWeek,float~
     +shiftPremiums map~ShiftName,float~
     +holidayPremium float
-    +classify(tick, hoursInDay, hoursInWeek) PayClass
   }
   class OvertimeReport {
     +resourceId
     +weekStart int
-    +regularHours int
-    +premiumHours map~PayClass,int~
+    +regularTicks int
+    +premiumTicks map~PayClass,int~
+    +totalTicks int
   }
   class Schedule {
     <<immutable>>
@@ -280,7 +285,15 @@ Resources are renewable with integer capacity per tick (a crew of 4, 2 cranes). 
 
 Three independent premium sources are represented: **daily** hours beyond `dailyRegularHours`, **weekly** hours beyond `weeklyRegularHours` within a pay week starting on `weekStartsOn`, and **positional** premiums from `dayPremiums`, `shiftPremiums`, and `holidayPremium`. They are independent by construction because real agreements treat them independently — a Saturday carries its premium regardless of whether the week reached forty hours, and a compressed 4×10 week reaches forty hours without necessarily incurring daily overtime. Whether a given agreement exempts 4×10 from daily overtime is data in `PayRules`, never a hardcoded threshold.
 
-Weekly overtime is a property of a **resource across all its tasks**, not of any single task: a crew crosses forty hours from the combination of its assignments. Overtime is therefore computed as an aggregation over a whole schedule, `overtime_report(project, schedule) -> list[OvertimeReport]`, and never stored on a task.
+Weekly overtime is a property of a **resource across all its tasks**, not of any single task: a crew crosses forty hours from the combination of its assignments. Overtime is therefore computed as an aggregation over a whole set of task spans, `overtime_report(index, spans) -> tuple[OvertimeReport, ...]`, and never stored on a task. (Spans are passed in rather than read from a `Schedule` until the solver phase creates one; the arithmetic does not change when the signature does.)
+
+Each tick is classified into **exactly one** pay class, at the highest applicable multiplier. This is the no-pyramiding rule near-universal in construction agreements, and it is what makes `regular + Σ premium = total` hold — an invariant a report counting one hour in several categories could not offer, and without which the report is useless for cost. The comparison is on the multipliers themselves rather than a fixed order of classes, so an agreement paying Sunday at double and weekly overtime at time-and-a-half resolves correctly with no special case; `dailyOvertimeMultiplier` and `weeklyOvertimeMultiplier` exist so that comparison is possible. Ties break by a fixed precedence, because a report has to be reproducible (NFR1). Agreements that genuinely stack premiums are a v2 concern.
+
+Hours are counted as **wall-clock engagement of the resource**, not person-hours weighted by `Assignment.demand`. A crew of four with two units on each of two concurrent tasks worked one shift, not two, and a labour agreement's thresholds are per person per day. Concurrent assignments are unioned rather than summed, so overlapping work cannot invent hours nobody worked. Demand-weighted person-hours are a v2 refinement.
+
+Reports count **ticks**, not hours, keeping the arithmetic integer per design rule 5; conversion happens at the reporting boundary. Because thresholds are stated in hours, overtime accounting requires an axis on which an hour is a whole number of ticks — `ticksPerDay` of 24, 48, or 96, but not 8 or 1 — and refuses with a message naming the workable resolutions rather than rounding a labour threshold.
+
+`CalendarException.holiday` is independent of `working`. A holiday is normally non-working, but a crew called out on one is working a holiday, and that is precisely when the holiday premium applies; a single flag could not say both.
 
 In v1 overtime is **represented and reported, not optimized**. Cost objectives remain a later-phase concern (see `06-roadmap.md`); when they arrive, minimizing premium hours becomes an additional term in the `STABLE_RESOLVE` objective without a schema change.
 
@@ -324,7 +337,7 @@ Validation reports **every** problem it finds in one pass rather than stopping a
 
 Validation produces a `ProjectIndex`: the derived, validated view holding the WBS tree, expanded leaf dependencies, computed `wbsPath`s, the planning horizon, and a cache of effective `CalendarIndex`es keyed by the calendars they are built from, so tasks sharing a trade and a crew share one. It is held separately from `Project` rather than cached on it, because the entities are frozen values and hanging a mutable cache off them would make an immutable object quietly stateful. Possessing an index is evidence the project passed.
 
-`planningHorizon` bounds calendar materialisation and is derived when absent, by growing until every effective calendar can supply the project's whole work content — tasks may be strictly sequential, so a horizon that fits the largest task can still fall short of the chain. Growth stops as soon as it stops buying working time, which is what turns a task whose calendars never agree into a named error rather than an unbounded search.
+`planningHorizon` bounds calendar materialisation and is derived when absent, by growing until every effective calendar can supply the project's whole work content — tasks may be strictly sequential, so a horizon that fits the largest task can still fall short of the chain. Growth stops as soon as it stops buying working time, which is what turns a task whose calendars never agree into a named error rather than an unbounded search. The derived value carries headroom: a horizon that exactly fits the work only suffices for a schedule starting at tick zero with no idle time, and precedence and resource contention push work later. Blocks are cheap; refusing a valid schedule is not.
 
 A `Schedule` contains exactly one entry per leaf task — no more, no fewer. Every entry satisfies `start <= resumeAt <= finish` where `resumeAt` is set, and `W(finish) − W(resumeAt)` equals the work remaining at `dataDate`. `COMPLETE` entries finish at or before `dataDate`; `IN_PROGRESS` entries start at or before `dataDate` and resume at or after it; `PLANNED` entries start at or after it. `start` and `finish` both fall on working ticks of the task's effective calendar. A `ChangeSet`'s `added` and `removed` sets are disjoint, every `TaskMove` names a task present in both schedules, and every `added`/`removed` id is present in exactly one of them.
 

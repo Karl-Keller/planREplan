@@ -30,6 +30,10 @@ from planreplan.domain.time_axis import Tick
 #: work cannot fit in any sane span, which is a modelling error worth naming.
 _MAX_HORIZON_DOUBLINGS = 32
 
+#: Slack on a derived horizon, so work pushed later by precedence and resource
+#: contention still lands inside the materialised calendars.
+_HORIZON_HEADROOM = 2
+
 
 class ProjectValidationError(ValueError):
     """Every problem found in one pass."""
@@ -409,6 +413,12 @@ def _derive_horizon(project: Project, dependencies: tuple[Dependency, ...], requ
     calendars never agree has an empty effective calendar, and no horizon
     however large will change that — growing until an internal limit would turn
     a precise, reportable modelling error into an overflow.
+
+    The result carries headroom, because a horizon that exactly fits the work
+    only suffices for a schedule starting at tick zero with no idle time.
+    Precedence and resource contention push work later, so a minimal horizon
+    would reject perfectly ordinary schedules. Blocks are cheap; refusing a
+    valid plan is not.
     """
     if not required:
         return max(project.axis.ticks_per_day * 7, 1)
@@ -417,7 +427,7 @@ def _derive_horizon(project: Project, dependencies: tuple[Dependency, ...], requ
     for _ in range(_MAX_HORIZON_DOUBLINGS):
         available = _min_working_time(project, dependencies, horizon)
         if available >= required:
-            return horizon
+            return horizon * _HORIZON_HEADROOM
         if available <= previous:
             # More axis is not producing more working time; validate_project
             # reports the offending task by name.

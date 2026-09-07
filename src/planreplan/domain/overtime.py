@@ -1,0 +1,254 @@
+"""Overtime aggregation — a pure function over domain objects.
+
+``docs/03-domain-model.md``: weekly overtime is a property of a *resource
+across all its tasks*, never of a single task, because a crew crosses forty
+hours from the combination of its assignments. Aggregation therefore runs over
+a whole set of task spans and attributes hours to resources and pay weeks.
+
+v1 represents and reports overtime; it does not optimise against it. When cost
+objectives arrive, minimising premium time becomes another term in the
+``STABLE_RESOLVE`` objective without a schema change.
+
+Spans are passed in rather than read from a ``Schedule``, which does not exist
+until Phase 2. The signature will take a schedule then; the arithmetic will
+not change.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator, Mapping, Sequence
+from datetime import date, datetime, time, timedelta
+
+from pydantic import BaseModel, ConfigDict
+
+from planreplan.domain.calendar import Calendar, DayOfWeek
+from planreplan.domain.entities import PayClass, PayRules
+from planreplan.domain.time_axis import Tick, TimeAxis
+from planreplan.domain.validation import ProjectIndex
+
+#: A span of a task on the axis: start inclusive, finish exclusive.
+Span = tuple[Tick, Tick]
+
+#: Tie-break when two pay classes carry the same multiplier. Fixed so that a
+#: report is reproducible (NFR1) rather than dependent on iteration order.
+_PRECEDENCE: tuple[PayClass, ...] = (
+    PayClass.HOLIDAY,
+    PayClass.WEEKLY_OVERTIME,
+    PayClass.DAILY_OVERTIME,
+    PayClass.DAY_PREMIUM,
+    PayClass.SHIFT_PREMIUM,
+    PayClass.REGULAR,
+)
+
+_DEFAULT_RULES = PayRules(id="__default__")
+
+
+class OvertimeReport(BaseModel):
+    """What one resource accrued in one pay week.
+
+    Counted in ticks rather than hours so the arithmetic stays integer
+    (design rule 5); :meth:`hours` converts at the reporting boundary.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    resource_id: str
+    week_start: Tick
+    regular_ticks: int
+    premium_ticks: dict[PayClass, int]
+
+    @property
+    def total_ticks(self) -> int:
+        return self.regular_ticks + sum(self.premium_ticks.values())
+
+    def hours(self, axis: TimeAxis, ticks: int) -> float:
+        return ticks * 24 / axis.ticks_per_day
+
+
+class OvertimeResolutionError(ValueError):
+    """The axis cannot express an hour, so hour-based thresholds are meaningless."""
+
+
+def _ticks_per_hour(axis: TimeAxis) -> int:
+    if axis.ticks_per_day % 24:
+        raise OvertimeResolutionError(
+            f"overtime accounting needs an axis on which an hour is a whole number of "
+            f"ticks; ticks_per_day={axis.ticks_per_day} cannot express an hourly "
+            "threshold. Use 24, 48, or 96."
+        )
+    return axis.ticks_per_day // 24
+
+
+def _union(runs: Sequence[Span]) -> list[Span]:
+    """Merge overlapping engagement runs.
+
+    A resource assigned to two tasks running at the same time is on site once,
+    not twice; unioning is what stops a concurrent assignment inventing hours
+    nobody worked.
+    """
+    merged: list[list[Tick]] = []
+    for start, end in sorted(runs):
+        if start >= end:
+            continue
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
+
+
+def _engagement(index: ProjectIndex, spans: Mapping[str, Span], resource_id: str) -> list[Span]:
+    """Ticks during which a resource is actually working on something.
+
+    A resource is *reserved* across a task's whole span including internal
+    gaps, but it is only *working* during the effective calendar's working
+    time — nobody is paid for the weekend a task straddles.
+    """
+    runs: list[Span] = []
+    for task_id, span in spans.items():
+        start, finish = span
+        if not any(a.resource_id == resource_id for a in index.assignments_for(task_id)):
+            continue
+        for block in index.effective_calendar(task_id).blocks:
+            overlap_start = max(block.start, start)
+            overlap_end = min(block.end, finish)
+            if overlap_start < overlap_end:
+                runs.append((overlap_start, overlap_end))
+    return _union(runs)
+
+
+def _week_start(day: date, starts_on: DayOfWeek) -> date:
+    return day - timedelta(days=(day.weekday() - int(starts_on)) % 7)
+
+
+def _classify(
+    rules: PayRules,
+    *,
+    weekday: DayOfWeek,
+    shift_name: str | None,
+    is_holiday: bool,
+    day_ticks: int,
+    week_ticks: int,
+    daily_limit: int,
+    weekly_limit: int,
+) -> PayClass:
+    """The single pay class this tick earns.
+
+    Each tick is classified exactly once, at the highest applicable multiplier.
+    That is the no-pyramiding rule near-universal in construction agreements,
+    and it keeps ``regular + sum(premium) == total`` true, which a report that
+    counted an hour in several categories could not. Agreements that do stack
+    premiums are a v2 concern.
+
+    The comparison is on the multipliers themselves rather than a hardcoded
+    order of classes, so an agreement paying Sunday at double and weekly
+    overtime at time-and-a-half resolves correctly without special-casing.
+    """
+    candidates: list[tuple[PayClass, float]] = [(PayClass.REGULAR, 1.0)]
+    if day_ticks >= daily_limit:
+        candidates.append((PayClass.DAILY_OVERTIME, rules.daily_overtime_multiplier))
+    if week_ticks >= weekly_limit:
+        candidates.append((PayClass.WEEKLY_OVERTIME, rules.weekly_overtime_multiplier))
+    if weekday in rules.day_premiums:
+        candidates.append((PayClass.DAY_PREMIUM, rules.day_premiums[weekday]))
+    if shift_name is not None and shift_name in rules.shift_premiums:
+        candidates.append((PayClass.SHIFT_PREMIUM, rules.shift_premiums[shift_name]))
+    if is_holiday:
+        candidates.append((PayClass.HOLIDAY, rules.holiday_premium))
+    best = max(multiplier for _, multiplier in candidates)
+    return next(
+        pay_class
+        for pay_class in _PRECEDENCE
+        if any(c == pay_class and m == best for c, m in candidates)
+    )
+
+
+def _rules_for(index: ProjectIndex, resource_id: str) -> PayRules:
+    """A resource's agreement, falling back to the project's, then to defaults."""
+    resource = index.resource(resource_id)
+    by_id = {p.id: p for p in index.project.pay_rules}
+    chosen = resource.pay_rules_id or index.project.default_pay_rules_id
+    return by_id.get(chosen, _DEFAULT_RULES) if chosen else _DEFAULT_RULES
+
+
+def _base_calendar(index: ProjectIndex, resource_id: str) -> Calendar:
+    resource = index.resource(resource_id)
+    by_id = {c.id: c for c in index.project.calendars}
+    base = by_id[resource.calendar_id or index.project.default_calendar_id]
+    if resource.exceptions:
+        return base.model_copy(update={"exceptions": base.exceptions + resource.exceptions})
+    return base
+
+
+def _ticks(runs: Sequence[Span]) -> Iterator[Tick]:
+    for start, end in runs:
+        yield from range(start, end)
+
+
+def overtime_report(index: ProjectIndex, spans: Mapping[str, Span]) -> tuple[OvertimeReport, ...]:
+    """Regular and premium ticks per resource per pay week.
+
+    Hours are counted as **wall-clock engagement of the resource**, not
+    person-hours weighted by ``Assignment.demand``. A crew of four with two
+    units on each of two concurrent tasks worked one shift, not two, and the
+    thresholds in a labour agreement are per person per day. Demand-weighted
+    person-hours are a v2 refinement.
+
+    Args:
+        index: a validated project.
+        spans: task id to ``(start, finish)`` on the axis, finish exclusive.
+
+    Raises:
+        OvertimeResolutionError: if the axis cannot express a whole hour.
+    """
+    axis = index.project.axis
+    per_hour = _ticks_per_hour(axis)
+    reports: list[OvertimeReport] = []
+
+    for resource in index.project.resources:
+        runs = _engagement(index, spans, resource.id)
+        if not runs:
+            continue
+        rules = _rules_for(index, resource.id)
+        calendar = _base_calendar(index, resource.id)
+        daily_limit = rules.daily_regular_hours * per_hour
+        weekly_limit = rules.weekly_regular_hours * per_hour
+
+        weeks: dict[date, dict[PayClass, int]] = {}
+        day_totals: dict[date, int] = {}
+        week_totals: dict[date, int] = {}
+
+        for tick in _ticks(runs):
+            moment = axis.to_datetime(tick)
+            day = moment.date()
+            week = _week_start(day, rules.week_starts_on)
+            shift = calendar.shift_at(day, moment.hour * 60 + moment.minute)
+            pay_class = _classify(
+                rules,
+                weekday=DayOfWeek(day.weekday()),
+                shift_name=shift.name if shift else None,
+                is_holiday=calendar.is_holiday(day),
+                day_ticks=day_totals.get(day, 0),
+                week_ticks=week_totals.get(week, 0),
+                daily_limit=daily_limit,
+                weekly_limit=weekly_limit,
+            )
+            tally = weeks.setdefault(week, {})
+            tally[pay_class] = tally.get(pay_class, 0) + 1
+            day_totals[day] = day_totals.get(day, 0) + 1
+            week_totals[week] = week_totals.get(week, 0) + 1
+
+        for week in sorted(weeks):
+            tallies = dict(weeks[week])
+            regular = tallies.pop(PayClass.REGULAR, 0)
+            reports.append(
+                OvertimeReport(
+                    resource_id=resource.id,
+                    week_start=axis.to_tick(
+                        datetime.combine(week, time.min, tzinfo=axis.epoch.tzinfo)
+                    ),
+                    regular_ticks=regular,
+                    premium_ticks=tallies,
+                )
+            )
+    return tuple(reports)

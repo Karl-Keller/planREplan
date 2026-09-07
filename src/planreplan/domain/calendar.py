@@ -93,6 +93,10 @@ class CalendarException(BaseModel):
     inspector's absence — ``docs/03-domain-model.md`` asks for these to be
     handled uniformly, and folding resource unavailability in here is what
     keeps the ADR-8 block tables small.
+
+    ``holiday`` is separate from ``working`` because the two are independent: a
+    holiday is normally non-working, but a crew called out on one is working a
+    holiday, and that is exactly when the holiday premium applies.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -100,6 +104,7 @@ class CalendarException(BaseModel):
     start_date: date
     end_date: date
     working: bool = False
+    holiday: bool = False
     shifts: tuple[Shift, ...] = ()
     reason: str = ""
 
@@ -143,6 +148,17 @@ class Calendar(BaseModel):
             if exception.covers(day):
                 return exception.shifts if exception.working else ()
         return self.week_pattern.get(DayOfWeek(day.weekday()), ())
+
+    def shift_at(self, day: date, minute: int) -> Shift | None:
+        """The shift covering a local minute, or ``None`` outside working time."""
+        for shift in self.shifts_on(day):
+            if shift.start_minute <= minute < shift.end_minute:
+                return shift
+        return None
+
+    def is_holiday(self, day: date) -> bool:
+        """Whether any exception marks this date a holiday, working or not."""
+        return any(e.covers(day) and e.holiday for e in self.exceptions)
 
 
 @dataclass(frozen=True, slots=True)

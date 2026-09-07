@@ -82,6 +82,8 @@ class PayRules(BaseModel):
     week_starts_on: DayOfWeek = DayOfWeek.MONDAY
     daily_regular_hours: int = Field(default=8, gt=0)
     weekly_regular_hours: int = Field(default=40, gt=0)
+    daily_overtime_multiplier: float = Field(default=1.5, ge=1.0)
+    weekly_overtime_multiplier: float = Field(default=1.5, ge=1.0)
     day_premiums: dict[DayOfWeek, float] = Field(default_factory=dict)
     shift_premiums: dict[str, float] = Field(default_factory=dict)
     holiday_premium: float = Field(default=1.0, ge=1.0)
