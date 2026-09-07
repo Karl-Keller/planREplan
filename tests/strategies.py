@@ -100,13 +100,17 @@ def projects(
     max_tasks: int = 8,
     max_resources: int = 3,
     allow_summaries: bool = True,
+    kinds: tuple[DependencyKind, ...] = (DependencyKind.FS,),
 ) -> Project:
     """A valid project: acyclic, resourced, and schedulable on one calendar.
 
     Dependencies run strictly from a lower index to a higher one, which makes
-    the graph acyclic by construction rather than by rejection. Links are FS,
-    the only kind that expands across a summary on either side, so summaries
-    can appear without generating links validation would refuse.
+    the graph acyclic by construction rather than by rejection.
+
+    ``kinds`` defaults to FS alone because it is the only kind that expands
+    across a summary on either side, so summaries can appear without generating
+    links validation would refuse. Pass all four with ``allow_summaries=False``
+    to exercise the full precedence algebra.
     """
     axis = draw(time_axes())
     calendar = draw(calendars())
@@ -143,7 +147,7 @@ def projects(
                 Dependency(
                     predecessor_id=f"t{predecessor}",
                     successor_id=f"t{successor}",
-                    kind=DependencyKind.FS,
+                    kind=draw(st.sampled_from(list(kinds))),
                     lag=draw(st.integers(-4, 24)),
                 )
             )

@@ -315,6 +315,47 @@ class CalendarIndex:
             return self._blocks[following].start
         raise ValueError(f"no working tick at or after {tick} within the horizon")
 
+    def previous_working_tick(self, tick: Tick) -> Tick | None:
+        """Last working tick at or before ``tick``, or ``None`` if there is none.
+
+        The mirror of :meth:`next_working_tick`, and what a backward pass needs:
+        a late start pushed into a gap must resolve *backwards* to stay legal,
+        where an early start resolves forwards.
+        """
+        if tick < 0:
+            return None
+        self._check_horizon(min(tick, self.horizon))
+        position = bisect_right(self._starts, min(tick, self.horizon)) - 1
+        if position < 0:
+            return None
+        block = self._blocks[position]
+        return min(tick, block.end - 1)
+
+    def latest_start_for_finish(self, finish: Tick, duration: int) -> Tick | None:
+        """Latest start whose work fits entirely before ``finish``.
+
+        The backward-pass primitive. ``None`` when the horizon before ``finish``
+        cannot hold ``duration`` units at all.
+        """
+        if duration == 0:
+            return self.previous_working_tick(min(finish, self.horizon))
+        available = self.working_prefix(max(0, min(finish, self.horizon)))
+        if available < duration:
+            return None
+        return self.tick_at_work_index(available - duration)
+
+    def earliest_start_for_finish(self, finish: Tick, duration: int) -> Tick:
+        """Earliest start whose work ends at or after ``finish``.
+
+        The forward-pass primitive for FF and SF links, which bound a
+        successor's *finish* and so cannot be applied to its start directly.
+        """
+        if duration == 0:
+            return self.next_working_tick(max(0, min(finish, self.horizon)))
+        target = max(0, min(finish - 1, self.horizon))
+        last_index = self.working_prefix(self.next_working_tick(target))
+        return self.tick_at_work_index(max(0, last_index - duration + 1))
+
     def span(self, start: Tick, duration: int) -> int:
         """Ticks occupied by ``duration`` units of work beginning at ``start``.
 

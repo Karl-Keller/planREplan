@@ -129,3 +129,101 @@ def test_validate_is_documented(colour):
     result = runner.invoke(app, ["validate", "--help"])
     assert result.exit_code == 0
     assert "PROJECT" in plain(result.stdout)
+
+
+# -- cpm and overtime ------------------------------------------------------
+
+
+def _resourced_project():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from planreplan.domain import (
+        Assignment,
+        Calendar,
+        DayOfWeek,
+        Dependency,
+        PayRules,
+        Project,
+        Resource,
+        Shift,
+        Task,
+        TimeAxis,
+    )
+
+    calendar = Calendar(
+        id="5x8",
+        week_pattern=dict.fromkeys(
+            tuple(DayOfWeek)[:5], (Shift(name="day", start_minute=480, end_minute=960),)
+        ),
+    )
+    return Project(
+        id="foundation",
+        axis=TimeAxis(epoch=datetime(2026, 9, 7, tzinfo=ZoneInfo("America/New_York"))),
+        calendars=(calendar,),
+        default_calendar_id="5x8",
+        pay_rules=(PayRules(id="cba"),),
+        default_pay_rules_id="cba",
+        tasks=(Task(id="a", duration=8), Task(id="b", duration=8), Task(id="c", duration=8)),
+        dependencies=(Dependency(predecessor_id="a", successor_id="b"),),
+        resources=(Resource(id="crew", capacity=4),),
+        assignments=(Assignment(task_id="a", resource_id="crew"),),
+    )
+
+
+def test_cpm_reports_dates_and_the_critical_path(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_resourced_project(), tmp_path / "p")
+    result = runner.invoke(app, ["cpm", str(tmp_path / "p")])
+    assert result.exit_code == 0
+    output = plain(result.stdout)
+    assert "critical path" in output
+    assert "2026-09-07" in output  # dates by default
+
+
+def test_cpm_can_report_raw_ticks(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_resourced_project(), tmp_path / "p")
+    output = plain(runner.invoke(app, ["cpm", str(tmp_path / "p"), "--ticks"]).stdout)
+    assert "2026-" not in output
+    assert "project finish" in output
+
+
+def test_overtime_reports_per_resource_weeks(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_resourced_project(), tmp_path / "p")
+    result = runner.invoke(app, ["overtime", str(tmp_path / "p")])
+    assert result.exit_code == 0
+    assert "crew" in plain(result.stdout)
+
+
+def test_overtime_says_so_when_nothing_is_resourced(tmp_path):
+    from planreplan.io import save_project
+
+    project = _resourced_project().model_copy(update={"assignments": ()})
+    save_project(project, tmp_path / "p")
+    assert "nothing to report" in plain(
+        runner.invoke(app, ["overtime", str(tmp_path / "p")]).stdout
+    )
+
+
+def test_cpm_on_an_invalid_project_exits_one(tmp_path):
+    import json
+
+    from planreplan.io import save_project
+
+    path = save_project(_resourced_project(), tmp_path / "p")
+    raw = json.loads(path.read_text())
+    raw["tasks"][0]["duration"] = 0
+    path.write_text(json.dumps(raw))
+    assert runner.invoke(app, ["cpm", str(tmp_path / "p")]).exit_code == 1
+
+
+@pytest.mark.parametrize("command", ["validate", "cpm", "overtime"])
+def test_every_phase_one_command_is_documented(command, colour):
+    result = runner.invoke(app, [command, "--help"])
+    assert result.exit_code == 0
+    assert "PROJECT" in plain(result.stdout)
