@@ -15,8 +15,10 @@ schedule type existed; the arithmetic did not change when the type arrived.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import date, datetime, time, timedelta
+from itertools import pairwise
 
 from pydantic import BaseModel, ConfigDict
 
@@ -46,6 +48,16 @@ _DEFAULT_RULES = PayRules(id="__default__")
 class OvertimeReport(BaseModel):
     """What one resource accrued in one pay week.
 
+    Two quantities, answering two questions. ``*_ticks`` counts wall-clock
+    engagement of the resource: when the crew was on site, which is what the
+    per-person thresholds in a labour agreement are stated against.
+    ``*_person_ticks`` weights each of those by the units actually engaged,
+    giving labour content, which is what a cost ever gets built from.
+
+    Both are needed because neither answers the other's question. A crew of
+    four on an ordinary week worked 40 hours and 160 person-hours; charging
+    overtime on the second number would invent 120 hours nobody worked.
+
     Counted in ticks rather than hours so the arithmetic stays integer
     (design rule 5); :meth:`hours` converts at the reporting boundary.
     """
@@ -56,10 +68,16 @@ class OvertimeReport(BaseModel):
     week_start: Tick
     regular_ticks: int
     premium_ticks: dict[PayClass, int]
+    regular_person_ticks: int = 0
+    premium_person_ticks: dict[PayClass, int] = {}
 
     @property
     def total_ticks(self) -> int:
         return self.regular_ticks + sum(self.premium_ticks.values())
+
+    @property
+    def total_person_ticks(self) -> int:
+        return self.regular_person_ticks + sum(self.premium_person_ticks.values())
 
     def hours(self, axis: TimeAxis, ticks: int) -> float:
         return ticks * 24 / axis.ticks_per_day
@@ -79,42 +97,48 @@ def _ticks_per_hour(axis: TimeAxis) -> int:
     return axis.ticks_per_day // 24
 
 
-def _union(runs: Sequence[Span]) -> list[Span]:
-    """Merge overlapping engagement runs.
-
-    A resource assigned to two tasks running at the same time is on site once,
-    not twice; unioning is what stops a concurrent assignment inventing hours
-    nobody worked.
-    """
-    merged: list[list[Tick]] = []
-    for start, end in sorted(runs):
-        if start >= end:
-            continue
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], end)
-        else:
-            merged.append([start, end])
-    return [(start, end) for start, end in merged]
-
-
-def _engagement(index: ProjectIndex, spans: Mapping[str, Span], resource_id: str) -> list[Span]:
-    """Ticks during which a resource is actually working on something.
+def _reservations(
+    index: ProjectIndex, spans: Mapping[str, Span], resource_id: str
+) -> list[tuple[Tick, Tick, int]]:
+    """Working-time segments this resource is held for, with unit counts.
 
     A resource is *reserved* across a task's whole span including internal
-    gaps, but it is only *working* during the effective calendar's working
-    time — nobody is paid for the weekend a task straddles.
+    gaps, but only *working* during the effective calendar's working time —
+    nobody is paid for the weekend a task straddles. Each segment carries the
+    assignment's demand so utilisation is not thrown away.
     """
-    runs: list[Span] = []
-    for task_id, span in spans.items():
-        start, finish = span
-        if not any(a.resource_id == resource_id for a in index.assignments_for(task_id)):
-            continue
-        for block in index.effective_calendar(task_id).blocks:
-            overlap_start = max(block.start, start)
-            overlap_end = min(block.end, finish)
-            if overlap_start < overlap_end:
-                runs.append((overlap_start, overlap_end))
-    return _union(runs)
+    segments: list[tuple[Tick, Tick, int]] = []
+    for task_id, (start, finish) in spans.items():
+        for assignment in index.assignments_for(task_id):
+            if assignment.resource_id != resource_id:
+                continue
+            for block in index.effective_calendar(task_id).blocks:
+                overlap_start = max(block.start, start)
+                overlap_end = min(block.end, finish)
+                if overlap_start < overlap_end:
+                    segments.append((overlap_start, overlap_end, assignment.demand))
+    return segments
+
+
+def _engaged(segments: Sequence[tuple[Tick, Tick, int]]) -> Iterator[tuple[Tick, int]]:
+    """Each engaged tick, with how many units were engaged on it.
+
+    A sweep over segment endpoints rather than a union of intervals. The union
+    answered *whether* the crew was on site and discarded *how much of it* —
+    two of four units looked identical to all four, which is exactly the
+    utilisation a cost is built from.
+    """
+    deltas: dict[Tick, int] = defaultdict(int)
+    for start, end, demand in segments:
+        deltas[start] += demand
+        deltas[end] -= demand
+    points = sorted(deltas)
+    engaged = 0
+    for point, following in pairwise(points):
+        engaged += deltas[point]
+        if engaged > 0:
+            for tick in range(point, following):
+                yield tick, engaged
 
 
 def _week_start(day: date, starts_on: DayOfWeek) -> date:
@@ -207,8 +231,8 @@ def overtime_report(index: ProjectIndex, schedule: Schedule) -> tuple[OvertimeRe
     reports: list[OvertimeReport] = []
 
     for resource in index.project.resources:
-        runs = _engagement(index, spans, resource.id)
-        if not runs:
+        segments = _reservations(index, spans, resource.id)
+        if not segments:
             continue
         rules = _rules_for(index, resource.id)
         calendar = _base_calendar(index, resource.id)
@@ -216,10 +240,11 @@ def overtime_report(index: ProjectIndex, schedule: Schedule) -> tuple[OvertimeRe
         weekly_limit = rules.weekly_regular_hours * per_hour
 
         weeks: dict[date, dict[PayClass, int]] = {}
+        person_weeks: dict[date, dict[PayClass, int]] = {}
         day_totals: dict[date, int] = {}
         week_totals: dict[date, int] = {}
 
-        for tick in _ticks(runs):
+        for tick, engaged in _engaged(segments):
             moment = axis.to_datetime(tick)
             day = moment.date()
             week = _week_start(day, rules.week_starts_on)
@@ -236,20 +261,27 @@ def overtime_report(index: ProjectIndex, schedule: Schedule) -> tuple[OvertimeRe
             )
             tally = weeks.setdefault(week, {})
             tally[pay_class] = tally.get(pay_class, 0) + 1
+            person_tally = person_weeks.setdefault(week, {})
+            person_tally[pay_class] = person_tally.get(pay_class, 0) + engaged
+            # Thresholds accumulate wall-clock engagement, not person-hours: an
+            # agreement's 8 and 40 are stated per person, and the crew's own
+            # hours are the best available proxy for its members'.
             day_totals[day] = day_totals.get(day, 0) + 1
             week_totals[week] = week_totals.get(week, 0) + 1
 
         for week in sorted(weeks):
             tallies = dict(weeks[week])
-            regular = tallies.pop(PayClass.REGULAR, 0)
+            person_tallies = dict(person_weeks[week])
             reports.append(
                 OvertimeReport(
                     resource_id=resource.id,
                     week_start=axis.to_tick(
                         datetime.combine(week, time.min, tzinfo=axis.epoch.tzinfo)
                     ),
-                    regular_ticks=regular,
+                    regular_ticks=tallies.pop(PayClass.REGULAR, 0),
                     premium_ticks=tallies,
+                    regular_person_ticks=person_tallies.pop(PayClass.REGULAR, 0),
+                    premium_person_ticks=person_tallies,
                 )
             )
     return tuple(reports)

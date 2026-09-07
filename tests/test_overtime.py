@@ -309,3 +309,121 @@ def test_half_hour_resolution_scales_the_thresholds():
     reports = overtime_report(index, schedule)
     assert reports[0].regular_ticks == 80  # forty hours at two ticks each
     assert reports[0].premium_ticks[PayClass.WEEKLY_OVERTIME] == 16
+
+
+# -- demand weighting ------------------------------------------------------
+
+
+def test_person_ticks_scale_wall_clock_by_the_units_engaged():
+    """A crew of four on a normal week: 40 hours, 160 person-hours, no overtime.
+
+    Charging overtime on the second number would invent 120 hours nobody
+    worked, which is why the two quantities are reported separately rather
+    than one replacing the other.
+    """
+    project = Project(
+        id="p",
+        axis=AXIS,
+        calendars=ALL_CALENDARS,
+        default_calendar_id="5x8",
+        tasks=(Task(id="t", duration=40),),
+        resources=(Resource(id="crew", capacity=4),),
+        assignments=(Assignment(task_id="t", resource_id="crew", demand=4),),
+    )
+    index = validate_project(project)
+    calendar = index.effective_calendar("t")
+    start = calendar.tick_at_work_index(0)
+    reports = overtime_report(index, schedule_of({"t": (start, calendar.finish(start, 40))}))
+    week = reports[0]
+    assert week.regular_ticks == 40
+    assert week.regular_person_ticks == 160
+    assert week.premium_ticks == {}
+
+
+def test_partial_engagement_is_no_longer_thrown_away():
+    """Two of four units is half the labour, and the union could not say so."""
+    project = Project(
+        id="p",
+        axis=AXIS,
+        calendars=ALL_CALENDARS,
+        default_calendar_id="5x8",
+        tasks=(Task(id="t", duration=8),),
+        resources=(Resource(id="crew", capacity=4),),
+        assignments=(Assignment(task_id="t", resource_id="crew", demand=2),),
+    )
+    index = validate_project(project)
+    calendar = index.effective_calendar("t")
+    start = calendar.tick_at_work_index(0)
+    report = overtime_report(index, schedule_of({"t": (start, calendar.finish(start, 8))}))[0]
+    assert report.total_ticks == 8
+    assert report.total_person_ticks == 16
+
+
+def test_concurrent_tasks_add_their_demands_without_adding_hours():
+    """The crew is on site once; the labour content is the sum."""
+    project = Project(
+        id="p",
+        axis=AXIS,
+        calendars=ALL_CALENDARS,
+        default_calendar_id="5x8",
+        tasks=(Task(id="a", duration=8), Task(id="b", duration=8)),
+        resources=(Resource(id="crew", capacity=4),),
+        assignments=(
+            Assignment(task_id="a", resource_id="crew", demand=2),
+            Assignment(task_id="b", resource_id="crew", demand=2),
+        ),
+    )
+    index = validate_project(project)
+    calendar = index.effective_calendar("a")
+    start = calendar.tick_at_work_index(0)
+    span = (start, calendar.finish(start, 8))
+    report = overtime_report(index, schedule_of({"a": span, "b": span}))[0]
+    assert report.total_ticks == 8  # one shift, not two
+    assert report.total_person_ticks == 32  # four units for eight ticks
+
+
+def test_premium_person_ticks_follow_the_same_classification():
+    """Saturday's premium applies to the units actually there."""
+    rules = PayRules(id="cba", day_premiums={DayOfWeek.SATURDAY: 1.5})
+    project = Project(
+        id="p",
+        axis=AXIS,
+        calendars=ALL_CALENDARS,
+        default_calendar_id="fri_sat",
+        pay_rules=(rules,),
+        default_pay_rules_id="cba",
+        tasks=(Task(id="t", duration=16),),
+        resources=(Resource(id="crew", capacity=3),),
+        assignments=(Assignment(task_id="t", resource_id="crew", demand=3),),
+    )
+    index = validate_project(project)
+    calendar = index.effective_calendar("t")
+    start = calendar.tick_at_work_index(0)
+    report = overtime_report(index, schedule_of({"t": (start, calendar.finish(start, 16))}))[0]
+    assert report.premium_ticks[PayClass.DAY_PREMIUM] == 8
+    assert report.premium_person_ticks[PayClass.DAY_PREMIUM] == 24
+
+
+def test_the_totals_invariant_holds_in_both_units():
+    rules = PayRules(id="cba", day_premiums={DayOfWeek.SATURDAY: 1.5, DayOfWeek.SUNDAY: 2.0})
+    project = Project(
+        id="p",
+        axis=AXIS,
+        calendars=ALL_CALENDARS,
+        default_calendar_id="7x8",
+        pay_rules=(rules,),
+        default_pay_rules_id="cba",
+        tasks=(Task(id="t", duration=60),),
+        resources=(Resource(id="crew", capacity=2),),
+        assignments=(Assignment(task_id="t", resource_id="crew", demand=2),),
+    )
+    index = validate_project(project)
+    calendar = index.effective_calendar("t")
+    start = calendar.tick_at_work_index(0)
+    reports = overtime_report(index, schedule_of({"t": (start, calendar.finish(start, 60))}))
+    assert sum(r.total_ticks for r in reports) == 60
+    assert sum(r.total_person_ticks for r in reports) == 120
+    for report in reports:
+        assert report.total_person_ticks == report.regular_person_ticks + sum(
+            report.premium_person_ticks.values()
+        )

@@ -257,9 +257,13 @@ def check(
 def overtime(project: ProjectArg) -> None:
     """Report regular and premium time per resource per pay week.
 
-    The schedule comes from the CPM early dates, which is the earliest
-    anything can be said about overtime before a solver accounts for resource
-    contention.
+    Two columns, answering two questions. *ticks* is wall-clock engagement of
+    the resource, which is what a labour agreement's per-person thresholds are
+    stated against. *person* weights each tick by the units actually engaged,
+    which is what a cost is built from.
+
+    The schedule comes from the CPM early dates, the earliest anything can be
+    said about overtime before a solver accounts for resource contention.
     """
     index = _load_and_validate(project)
     reports = overtime_report(index, analyse(index).to_schedule())
@@ -271,12 +275,14 @@ def overtime(project: ProjectArg) -> None:
     for report in reports:
         week = axis.to_datetime(report.week_start).strftime("%Y-%m-%d")
         typer.echo(f"{report.resource_id}  week of {week}")
-        typer.echo(f"    regular   {report.regular_ticks:>5}")
+        typer.echo(f"    {'':<14}{'ticks':>7}{'person':>8}")
+        typer.echo(f"    {'regular':<14}{report.regular_ticks:>7}{report.regular_person_ticks:>8}")
         for pay_class in PayClass:
             ticks = report.premium_ticks.get(pay_class)
             if ticks:
-                typer.echo(f"    {pay_class.value:<9} {ticks:>5}")
-        typer.echo(f"    total     {report.total_ticks:>5}")
+                person = report.premium_person_ticks.get(pay_class, 0)
+                typer.echo(f"    {pay_class.value:<14}{ticks:>7}{person:>8}")
+        typer.echo(f"    {'total':<14}{report.total_ticks:>7}{report.total_person_ticks:>8}")
 
 
 @app.command()

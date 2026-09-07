@@ -130,7 +130,10 @@ classDiagram
     +weekStart int
     +regularTicks int
     +premiumTicks map~PayClass,int~
+    +regularPersonTicks int
+    +premiumPersonTicks map~PayClass,int~
     +totalTicks int
+    +totalPersonTicks int
   }
   class Schedule {
     <<immutable>>
@@ -290,7 +293,15 @@ Weekly overtime is a property of a **resource across all its tasks**, not of any
 
 Each tick is classified into **exactly one** pay class, at the highest applicable multiplier. This is the no-pyramiding rule near-universal in construction agreements, and it is what makes `regular + Σ premium = total` hold — an invariant a report counting one hour in several categories could not offer, and without which the report is useless for cost. The comparison is on the multipliers themselves rather than a fixed order of classes, so an agreement paying Sunday at double and weekly overtime at time-and-a-half resolves correctly with no special case; `dailyOvertimeMultiplier` and `weeklyOvertimeMultiplier` exist so that comparison is possible. Ties break by a fixed precedence, because a report has to be reproducible (NFR1). Agreements that genuinely stack premiums are a v2 concern.
 
-Hours are counted as **wall-clock engagement of the resource**, not person-hours weighted by `Assignment.demand`. A crew of four with two units on each of two concurrent tasks worked one shift, not two, and a labour agreement's thresholds are per person per day. Concurrent assignments are unioned rather than summed, so overlapping work cannot invent hours nobody worked. Demand-weighted person-hours are a v2 refinement.
+A report carries **two quantities, answering two questions**, because neither answers the other's.
+
+**Wall-clock engagement** (`regularTicks`, `premiumTicks`) is when the resource was on site. A crew of four with two units on each of two concurrent tasks worked one shift, not two, so concurrent assignments are unioned in this count and cannot invent hours nobody worked. This is the quantity a labour agreement's thresholds are stated against, because 8-and-40 are per *person*.
+
+**Person-ticks** (`regularPersonTicks`, `premiumPersonTicks`) weight each engaged tick by the units actually engaged. This is labour content — what a cost is built from — and it is what the union alone discarded: two of four units looked identical to all four.
+
+Both are needed. A crew of four on an ordinary week worked 40 hours and 160 person-hours; running the 40-hour threshold against the second number would invent 120 hours of overtime nobody worked. So **classification is by wall-clock and quantity is weighted by demand**: each tick is classified once, from the pool's own hours, and then counted in both units. The `regular + Σ premium = total` invariant therefore holds in each.
+
+The residual approximation is worth naming. This is exact when the pool works as one gang, which is the ordinary construction case. It over-reports when membership rotates: two people covering Monday to Wednesday and two more covering Thursday to Saturday leaves nobody in weekly overtime, while the pool's own hours cross forty. Fixing that needs **identified resource units** — named slots rather than an integer capacity — which changes what `Resource.capacity` is and makes the CP-SAT encoding materially harder. It is a v3 candidate, not a v2 one.
 
 Reports count **ticks**, not hours, keeping the arithmetic integer per design rule 5; conversion happens at the reporting boundary. Because thresholds are stated in hours, overtime accounting requires an axis on which an hour is a whole number of ticks — `ticksPerDay` of 24, 48, or 96, but not 8 or 1 — and refuses with a message naming the workable resolutions rather than rounding a labour threshold.
 
