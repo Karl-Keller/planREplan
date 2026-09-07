@@ -15,9 +15,10 @@ goes through UTC so that a tick is always the same physical duration.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Final
+from typing import Any, Final
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 
 #: An integer tick offset from a project epoch. Kept as a plain alias so the
 #: type is documentation, not a wrapper the solver would have to unwrap.
@@ -39,6 +40,35 @@ class TimeAxis(BaseModel):
 
     epoch: datetime
     ticks_per_day: int = 24
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def timezone(self) -> str:
+        """IANA zone name, persisted alongside the epoch.
+
+        An ISO-8601 timestamp carries only a UTC *offset*, which is not enough
+        to reconstruct a zone: ``-05:00`` cannot say whether the zone observes
+        daylight saving. Reloading from the offset alone silently turns every
+        local shift boundary after the next transition by an hour. The name is
+        therefore part of the serialised form, per the persistence rules in
+        ``docs/03-domain-model.md``.
+        """
+        return str(self.epoch.tzinfo)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _restore_zone(cls, data: Any) -> Any:  # noqa: ANN401 — pre-validators take raw input
+        """Re-attach the named zone when loading a serialised axis."""
+        if not isinstance(data, dict) or "timezone" not in data:
+            return data
+        restored = {key: value for key, value in data.items() if key != "timezone"}
+        name = data["timezone"]
+        epoch = restored.get("epoch")
+        if isinstance(epoch, str):
+            epoch = datetime.fromisoformat(epoch)
+        if isinstance(epoch, datetime) and epoch.tzinfo is not None and name:
+            restored["epoch"] = epoch.astimezone(ZoneInfo(name))
+        return restored
 
     @field_validator("epoch")
     @classmethod

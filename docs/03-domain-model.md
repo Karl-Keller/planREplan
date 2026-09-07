@@ -345,4 +345,10 @@ Any violation is an error at the io/proposal boundary — invalid states are unr
 
 ## Persistence
 
-v1 persists a project directory: `project.json` (the entities above, versioned schema), `schedules/` (immutable schedule JSONs), `events.jsonl` (append-only progress and disruption log). `epoch` serializes as an ISO-8601 timestamp with offset and IANA zone name; every other time value serializes as a bare integer tick. SQLite arrives when querying needs outgrow files; the domain model must not assume either.
+v1 persists a project directory: `project.json` (the entities above, versioned schema), `schedules/` (immutable schedule JSONs), `events.jsonl` (append-only progress and disruption log). Saving creates all three so the layout is a fact on disk rather than a promise in a document, even while the latter two await the types they hold. SQLite arrives when querying needs outgrow files; the domain model must not assume either.
+
+`epoch` serializes as an ISO-8601 timestamp **and a separate IANA zone name**. The name is not redundant with the offset: `-05:00` cannot say whether the zone observes daylight saving, so an axis reconstructed from the offset alone silently moves every local shift boundary after the next transition by an hour. Every other time value serializes as a bare integer tick.
+
+`schemaVersion` is checked strictly on load. A newer version is refused, because a file may hold fields whose meaning this build does not know and reading it as though it were current would corrupt a schedule quietly. An older version is refused too, naming the missing migration. There is exactly one version, and a migration framework built for it would be speculative; the hook goes in when the second version does.
+
+Whole-project validation is available at the io boundary but not automatic. Parsing already rejects a malformed entity, while `validate_project` builds calendars and returns an index worth keeping, so a caller wanting the index asks once rather than paying twice.

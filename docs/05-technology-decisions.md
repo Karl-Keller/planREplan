@@ -20,7 +20,7 @@ Validation at the boundary makes invalid states unrepresentable in the core, whi
 
 ## ADR-4: Files first (JSON + JSONL), SQLite when queries demand it
 
-A project directory of versioned JSON plus an append-only event log is transparent, diffable, git-friendly, and sufficient for single-project v1. Consequence: a `SchemaVersion` field and migration policy from day one; the domain must not assume a storage engine.
+A project directory of versioned JSON plus an append-only event log is transparent, diffable, git-friendly, and sufficient for single-project v1. Consequence: a `SchemaVersion` field and migration policy from day one; the domain must not assume a storage engine. The policy is strict refusal in both directions — a newer file may carry fields whose meaning this build does not know, and an older one names the migration nobody has written yet. Guessing either way would corrupt a schedule silently, which is worse than declining to open it.
 
 ## ADR-5: Typer CLI first; FastAPI service later; reports as self-contained HTML
 

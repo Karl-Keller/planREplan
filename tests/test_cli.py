@@ -68,3 +68,64 @@ def test_version_is_a_three_part_string():
     parts = __version__.split(".")
     assert len(parts) == 3
     assert all(p.isdigit() for p in parts)
+
+
+# -- validate --------------------------------------------------------------
+
+
+def _demo_project(**overrides):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from planreplan.domain import Calendar, DayOfWeek, Project, Shift, Task, TimeAxis
+
+    calendar = Calendar(
+        id="5x8",
+        week_pattern=dict.fromkeys(
+            tuple(DayOfWeek)[:5], (Shift(name="day", start_minute=480, end_minute=960),)
+        ),
+    )
+    base = {
+        "id": "demo",
+        "axis": TimeAxis(epoch=datetime(2026, 9, 7, tzinfo=ZoneInfo("America/New_York"))),
+        "calendars": (calendar,),
+        "default_calendar_id": "5x8",
+        "tasks": (Task(id="a", duration=16),),
+    }
+    return Project(**{**base, **overrides})
+
+
+def test_validate_reports_a_valid_project(tmp_path):
+    from planreplan.io import save_project
+
+    save_project(_demo_project(), tmp_path / "p")
+    result = runner.invoke(app, ["validate", str(tmp_path / "p")])
+    assert result.exit_code == 0
+    assert "is valid" in plain(result.stdout)
+
+
+def test_validate_lists_every_problem_and_exits_one(tmp_path):
+    import json
+
+    from planreplan.io import save_project
+
+    path = save_project(_demo_project(), tmp_path / "p")
+    raw = json.loads(path.read_text())
+    raw["default_calendar_id"] = "ghost"
+    raw["tasks"][0]["duration"] = 0
+    path.write_text(json.dumps(raw))
+
+    result = runner.invoke(app, ["validate", str(tmp_path / "p")])
+    assert result.exit_code == 1
+    assert "2 problems" in plain(result.output)
+
+
+def test_an_unreadable_project_exits_two_not_one(tmp_path):
+    """A caller can tell "this plan is wrong" from "there is no plan here"."""
+    assert runner.invoke(app, ["validate", str(tmp_path / "absent")]).exit_code == 2
+
+
+def test_validate_is_documented(colour):
+    result = runner.invoke(app, ["validate", "--help"])
+    assert result.exit_code == 0
+    assert "PROJECT" in plain(result.stdout)
